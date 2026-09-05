@@ -4,3 +4,6 @@ build/
 artifacts/
 secrets.ini
 .DS_Store
+data/*.mp3
+data/*.jpg
+include/web_page.h
