@@ -1,0 +1,6 @@
+.pio/
+.venv/
+build/
+artifacts/
+secrets.ini
+.DS_Store
