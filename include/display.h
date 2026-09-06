@@ -16,6 +16,8 @@ private:
     M5Canvas canvas_, cover_;
     KeyEdges keys_;
     int view_ = 0, selected_ = 0, setting_ = 0, coverTrack_ = -2;
+    int playlistSelected_ = 0;
+    String playlistError_;
     bool sleeping_ = false, locked_ = false, searching_ = false, pairing_ = false;
     int editing_ = 0;
     String input_, query_;
@@ -24,6 +26,7 @@ private:
     void text(const String& value, int x, int y, int width, uint32_t color = 0xf2f4f1);
     void nowPlaying(const AudioState& state);
     void library();
+    void playlists();
     void settings();
     void activateSetting(int delta = 0);
     void loadCover();

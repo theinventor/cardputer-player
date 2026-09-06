@@ -75,6 +75,22 @@ void Display::library() {
         id = app_.library.find(query_.c_str(), id + 1);
     }
 }
+void Display::playlists() {
+    const auto& lists = app_.playlists.list();
+    playlistSelected_ = std::min(playlistSelected_, int(lists.size()));
+    text(playlistError_.isEmpty() ? app_.playlistName : playlistError_, 8, 38, 224, playlistError_.isEmpty() ? Muted : Pink);
+    int start = std::max(0, playlistSelected_ - 4);
+    for (int i = start; i <= int(lists.size()) && i < start + 5; ++i) {
+        int y = 53 + (i - start) * 15;
+        uint32_t id = i ? lists[i - 1].id : 0;
+        String name = i ? lists[i - 1].name.c_str() : "All music";
+        size_t count = i ? lists[i - 1].count : app_.library.count();
+        if (i == playlistSelected_) canvas_.fillRect(4, y, 232, 15, Accent);
+        uint32_t color = i == playlistSelected_ ? Background : id == app_.activePlaylist ? Accent : 0xf2f4f1;
+        text(name, 8, y + 1, 184, color);
+        text(String(count), 199, y + 1, 32, color);
+    }
+}
 void Display::settings() {
     if (pairing_) {
         text("Access key", 8, 42, 225, Accent);
@@ -118,13 +134,14 @@ void Display::render() {
     text("V" + String(app_.settings.volume), 112, 2, 37, Muted);
     text(WiFi.isConnected() ? "WiFi" : "", 158, 2, 29, Muted);
     text(String(M5.Power.getBatteryLevel()) + "%", 198, 2, 40, Muted);
-    const char* tabs[] = {"Playing", "Library", "Settings"};
-    for (int i = 0; i < 3; ++i) {
-        text(tabs[i], 8 + i * 80, 22, 74, i == view_ ? Accent : Muted);
-        if (i == view_) canvas_.fillRect(8 + i * 80, 35, 54, 1, Accent);
+    const char* tabs[] = {"Playing", "Library", "Playlists", "Settings"};
+    for (int i = 0; i < 4; ++i) {
+        text(tabs[i], 4 + i * 60, 22, 56, i == view_ ? Accent : Muted);
+        if (i == view_) canvas_.fillRect(4 + i * 60, 35, 54, 1, Accent);
     }
     if (view_ == 0) nowPlaying(state);
     else if (view_ == 1) library();
+    else if (view_ == 2) playlists();
     else settings();
     canvas_.pushSprite(0, 0); lastDraw_ = millis();
 }
@@ -168,10 +185,10 @@ void Display::key(const String& key) {
         else if (key == "backspace") { if (query_.length()) query_.remove(query_.length() - 1); }
         else if (key.length() == 1 && query_.length() < 64) query_ += key;
         selected_ = app_.library.find(query_.c_str(), 0);
-    } else if (key == "tab") view_ = (view_ + 1) % 3;
+    } else if (key == "tab") { view_ = (view_ + 1) % 4; playlistError_ = ""; }
     else if (key == "escape" || key == "`") { view_ = 0; query_ = ""; }
     else if (key == "[" || key == "]") command("volume", String(std::max(0, std::min(100, int(app_.settings.volume) + (key == "[" ? -5 : 5)))));
-    else if (view_ == 2) {
+    else if (view_ == 3) {
         if (key == "up" || key == ";") setting_ = std::max(0, setting_ - 1);
         else if (key == "down" || key == ".") setting_ = std::min(9, setting_ + 1);
         else if (key == "enter" || key == "left" || key == "right") activateSetting(key == "left" ? -1 : 1);
@@ -185,12 +202,21 @@ void Display::key(const String& key) {
     else if (key == "left" || key == "right" || key == "," || key == "/") {
         int second = app_.audio.state().positionMs / 1000;
         command("seek", String(std::max(0, second + (key == "left" || key == "," ? -10 : 10))));
+    } else if (view_ == 2) {
+        const auto& lists = app_.playlists.list();
+        playlistSelected_ = std::min(playlistSelected_, int(lists.size()));
+        if (key == "up" || key == ";") { playlistSelected_ = std::max(0, playlistSelected_ - 1); playlistError_ = ""; }
+        else if (key == "down" || key == ".") { playlistSelected_ = std::min(int(lists.size()), playlistSelected_ + 1); playlistError_ = ""; }
+        else if (key == "enter") {
+            uint32_t id = playlistSelected_ ? lists[playlistSelected_ - 1].id : 0;
+            if (app_.selectPlaylist(id, true, playlistError_)) view_ = 0;
+        }
     } else if (view_ == 1) {
         if (key == "up" || key == ";" || key == "down" || key == ".") {
             int direction = key == "up" || key == ";" ? -1 : 1;
             int next = app_.library.find(query_.c_str(), selected_ + direction, direction);
             if (next >= 0) selected_ = next;
-        } else if (key == "enter" && selected_ >= 0) { app_.play(selected_); view_ = 0; }
+        } else if (key == "enter" && selected_ >= 0) { command("play-library", String(selected_)); view_ = 0; }
         else if (key == "q" && selected_ >= 0) command("enqueue", String(selected_));
     }
     render();

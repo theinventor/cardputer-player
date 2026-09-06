@@ -3,6 +3,7 @@
 #include <LittleFS.h>
 #include <mutex>
 #include "media.h"
+#include "playlists.h"
 
 namespace ct {
 extern std::recursive_mutex sdMutex;
@@ -36,6 +37,7 @@ public:
     bool scan(void (*progress)(uint32_t) = nullptr);
     bool append(const char* path);
     bool get(uint32_t id, Track& track);
+    bool available(const char* path);
     int find(const std::string& query, int start, int direction = 1);
     int byPath(const char* path);
     uint32_t count() const { return count_ + (demo_ ? 1 : 0); }
@@ -47,5 +49,17 @@ private:
     bool mounted_ = false;
     bool demo_ = false;
     uint32_t count_ = 0, skipped_ = 0;
+};
+class SDPlaylistFiles : public PlaylistFiles {
+public:
+    explicit SDPlaylistFiles(Library& library) : library_(library) {}
+    bool ready() const override { return library_.mounted(); }
+    bool exists(const std::string& path) override { SDLock lock(sdMutex); return SD.exists(path.c_str()); }
+    bool read(const std::string& path, std::string& data, size_t maximum) override;
+    bool write(const std::string& path, const std::string& data) override;
+    bool rename(const std::string& from, const std::string& to) override { SDLock lock(sdMutex); return SD.rename(from.c_str(), to.c_str()); }
+    bool remove(const std::string& path) override { SDLock lock(sdMutex); return SD.remove(path.c_str()); }
+private:
+    Library& library_;
 };
 }

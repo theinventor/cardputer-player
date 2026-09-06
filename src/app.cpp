@@ -1,6 +1,8 @@
 #include "app.h"
 #include <ESPmDNS.h>
 #include <esp_system.h>
+#include <map>
+#include <string_view>
 
 namespace ct {
 String jsonString(cJSON* json) {
@@ -35,23 +37,26 @@ bool App::begin() {
     settings.sleepSeconds = preferences.getUShort("sleep", 60);
     M5.Display.setBrightness(settings.brightness);
     library.begin();
+    playlists.begin();
     order.seed(esp_random()); order.reset(library.count());
     order.shuffle(preferences.getBool("shuffle", false));
     uint8_t repeat = preferences.getUChar("repeat", 1);
     order.repeat(repeat <= 2 ? static_cast<Repeat>(repeat) : Repeat::All);
+    activePlaylist = preferences.getUInt("playlist", 0);
+    restorePlaylist();
     ready = audio.begin(settings.volume);
     audio.visualizer(settings.visualizer);
     if (!ready) notice = "Audio initialization failed";
     if (settings.wifi) connectWifi();
     String path = preferences.getString("track");
     int id = library.byPath(path.c_str());
-    if (ready && id >= 0) play(id, preferences.getUInt("position", 0), true);
+    if (ready && id >= 0 && order.contains(id)) play(id, preferences.getUInt("position", 0), true);
     Serial.printf("Cardtunes ready: board=%d sd=%d tracks=%lu heap=%lu\n", int(M5.getBoard()), library.mounted(), library.count(), ESP.getFreeHeap());
     return ready;
 }
 bool App::play(int id, uint32_t position, bool paused) {
     Track track;
-    if (!ready || id < 0 || !library.get(id, track)) return false;
+    if (!ready || id < 0 || !order.contains(id) || !library.get(id, track)) return false;
     AudioCommand cmd; cmd.action = AudioAction::Play; cmd.track = id;
     cmd.value = position; cmd.paused = paused; copyText(cmd.path, track.path);
     if (!audio.send(cmd)) return false;
@@ -63,13 +68,20 @@ bool App::control(const String& action, const String& value, String& error) {
     uint32_t n = 0;
     auto number = [&](uint32_t limit) { if (!parseNumber(value, limit, n)) { error = "Invalid numeric value"; return false; } return true; };
     AudioCommand cmd;
-    if (action == "play") {
-        if (value.isEmpty()) { auto state = audio.state(); if (state.playback == Playback::Paused) cmd.action = AudioAction::Resume; else return play(order.current() >= 0 ? order.current() : 0); }
+    if (action == "playlist") {
+        if (value != "all" && (!number(Playlists::MaxLists) || !n)) { error = "Expected playlist ID or all"; return false; }
+        return selectPlaylist(value == "all" ? 0 : n, true, error);
+    } else if (action == "play-library") {
+        if (!number(library.count() ? library.count() - 1 : 0) || !library.count()) return false;
+        if (activePlaylist && !selectPlaylist(0, false, error)) return false;
+        return play(n);
+    } else if (action == "play") {
+        if (value.isEmpty()) { auto state = audio.state(); if (state.playback == Playback::Paused && order.current() == state.track) cmd.action = AudioAction::Resume; else return play(order.current() >= 0 ? order.current() : order.first()); }
         else { if (!number(library.count() ? library.count() - 1 : 0)) return false; return play(n); }
     } else if (action == "pause") cmd.action = AudioAction::Pause;
     else if (action == "toggle") {
         auto s = audio.state();
-        if (s.playback == Playback::Stopped || s.playback == Playback::Ended || s.playback == Playback::Error) return play(order.current() >= 0 ? order.current() : 0);
+        if (s.playback == Playback::Stopped || s.playback == Playback::Ended || s.playback == Playback::Error) return play(order.current() >= 0 ? order.current() : order.first());
         cmd.action = AudioAction::Toggle;
     } else if (action == "next") { int id = order.next(); if (id < 0) { error = "End of queue"; return false; } return play(id); }
     else if (action == "previous") {
@@ -85,7 +97,11 @@ bool App::control(const String& action, const String& value, String& error) {
         if (value != "off" && value != "all" && value != "one") { error = "Expected off, all, or one"; return false; }
         order.repeat(value == "one" ? Repeat::One : value == "all" ? Repeat::All : Repeat::Off);
         preferences.putUChar("repeat", static_cast<uint8_t>(order.repeat())); return true;
-    } else if (action == "enqueue") { if (!number(library.count() ? library.count() - 1 : 0)) return false; return order.enqueue(n); }
+    } else if (action == "enqueue") {
+        if (!number(library.count() ? library.count() - 1 : 0)) return false;
+        if (!order.enqueue(n)) { error = "Queue full or track outside the active playlist"; return false; }
+        return true;
+    }
     else if (action == "clear-queue") { order.clearQueue(); return true; }
     else if (action == "rescan") return rescan();
     else { error = "Unknown action"; return false; }
@@ -98,8 +114,134 @@ bool App::rescan() {
     notice = "Scanning music";
     bool ok = library.mounted() ? library.scan() : library.begin();
     order.reset(library.count()); currentTrack = Track{};
+    playlists.begin(); restorePlaylist();
     notice = ok ? "Library updated" : "No microSD detected";
     return ok;
+}
+std::vector<uint32_t> App::resolvePlaylist(const Playlist& playlist) {
+    std::map<std::string_view, int> wanted;
+    for (const auto& path : playlist.paths) wanted.emplace(path, -1);
+    Track track;
+    for (uint32_t i = 0; i < library.count(); ++i) {
+        if (library.get(i, track)) {
+            auto found = wanted.find(track.path);
+            if (found != wanted.end() && library.available(track.path)) found->second = i;
+        }
+        if (!(i % 32)) delay(1);
+    }
+    std::vector<uint32_t> ids;
+    for (const auto& path : playlist.paths) if (wanted[path] >= 0) ids.push_back(wanted[path]);
+    return ids;
+}
+void App::restorePlaylist() {
+    if (!activePlaylist) { playlistName = "All music"; return; }
+    Playlist playlist;
+    if (playlists.load(activePlaylist, playlist)) {
+        playlistName = playlist.name.c_str(); order.reset(resolvePlaylist(playlist));
+    } else {
+        playlistName = "Unavailable playlist"; order.reset(std::vector<uint32_t>{});
+        notice = playlists.error().c_str();
+    }
+}
+bool App::selectPlaylist(uint32_t id, bool start, String& error, int track) {
+    Playlist playlist;
+    std::vector<uint32_t> ids;
+    if (id) {
+        if (!playlists.load(id, playlist)) { error = playlists.error().c_str(); return false; }
+        ids = resolvePlaylist(playlist);
+        if (start && ids.empty()) { error = "Playlist has no available tracks"; return false; }
+    } else if (start && !library.count()) { error = "Library is empty"; return false; }
+    if (track >= 0 && (id ? std::find(ids.begin(), ids.end(), uint32_t(track)) == ids.end() : uint32_t(track) >= library.count())) {
+        error = "Track is not available in this playlist"; return false;
+    }
+    if (!audio.stopAndWait()) { error = "Player is busy"; return false; }
+    handledEnd_ = audio.state().epoch;
+    if (id) order.reset(ids); else order.reset(library.count());
+    activePlaylist = id; playlistName = id ? playlist.name.c_str() : "All music";
+    currentTrack = Track{};
+    preferences.putUInt("playlist", id); preferences.remove("track"); preferences.remove("position");
+    if (start && !play(track >= 0 ? track : order.first())) { error = "Cannot start playlist"; return false; }
+    saveResume();
+    return true;
+}
+bool App::editPlaylist(const String& action, uint32_t& id, const String& value, uint32_t to, String& error) {
+    if (action == "create") {
+        if (playlists.create(value.c_str(), id)) return true;
+        error = playlists.error().c_str(); return false;
+    }
+    Playlist playlist;
+    if (!playlists.load(id, playlist)) { error = playlists.error().c_str(); return false; }
+    if (action == "delete") {
+        if (activePlaylist == id && !audio.stopAndWait()) { error = "Player is busy"; return false; }
+        if (!playlists.erase(id)) { error = playlists.error().c_str(); return false; }
+        if (activePlaylist == id) return selectPlaylist(0, false, error);
+        return true;
+    }
+    uint32_t n = 0;
+    if (action == "rename") playlist.name = value.c_str();
+    else if (action == "add") {
+        Track track;
+        if (!parseNumber(value, Library::MaxTracks, n) || !library.get(n, track)) { error = "Track not found"; return false; }
+        if (std::find(playlist.paths.begin(), playlist.paths.end(), track.path) != playlist.paths.end()) { error = "Track is already in this playlist"; return false; }
+        if (playlist.paths.size() >= Playlists::MaxTracks) { error = "Playlist limit reached (128 tracks)"; return false; }
+        playlist.paths.emplace_back(track.path);
+    } else if (action == "remove" || action == "move") {
+        if (playlist.paths.empty() || !parseNumber(value, playlist.paths.size() - 1, n) || (action == "move" && to >= playlist.paths.size())) { error = "Invalid playlist position"; return false; }
+        std::string path = playlist.paths[n];
+        playlist.paths.erase(playlist.paths.begin() + n);
+        if (action == "move") playlist.paths.insert(playlist.paths.begin() + to, path);
+    } else { error = "Unknown playlist action"; return false; }
+    bool removingCurrent = activePlaylist == id && currentTrack.path[0] &&
+        std::find(playlist.paths.begin(), playlist.paths.end(), currentTrack.path) == playlist.paths.end();
+    if (removingCurrent && !audio.stopAndWait()) { error = "Player is busy"; return false; }
+    if (!playlists.save(playlist)) { error = playlists.error().c_str(); return false; }
+    if (activePlaylist == id) {
+        playlistName = playlist.name.c_str();
+        if (action != "rename") order.replace(resolvePlaylist(playlist));
+        if (removingCurrent) { currentTrack = Track{}; preferences.remove("track"); preferences.remove("position"); }
+    }
+    return true;
+}
+cJSON* App::playlistJson(uint32_t id, uint32_t offset, uint32_t limit) {
+    auto json = cJSON_CreateObject();
+    cJSON_AddNumberToObject(json, "active_playlist_id", activePlaylist);
+    if (!id) {
+        auto lists = cJSON_AddArrayToObject(json, "playlists");
+        for (const auto& item : playlists.list()) {
+            auto entry = cJSON_CreateObject();
+            cJSON_AddNumberToObject(entry, "id", item.id);
+            cJSON_AddStringToObject(entry, "name", item.name.c_str());
+            cJSON_AddNumberToObject(entry, "count", item.count);
+            cJSON_AddItemToArray(lists, entry);
+        }
+    } else {
+        Playlist playlist;
+        if (!playlists.load(id, playlist)) { cJSON_Delete(json); return nullptr; }
+        auto ids = resolvePlaylist(playlist);
+        std::map<std::string, uint32_t> available;
+        Track track;
+        for (auto trackId : ids) if (library.get(trackId, track)) available[track.path] = trackId;
+        cJSON_AddNumberToObject(json, "id", id);
+        cJSON_AddStringToObject(json, "name", playlist.name.c_str());
+        cJSON_AddNumberToObject(json, "count", playlist.paths.size());
+        cJSON_AddNumberToObject(json, "available", ids.size());
+        auto tracks = cJSON_AddArrayToObject(json, "tracks");
+        uint32_t end = std::min<uint32_t>(playlist.paths.size(), offset + limit);
+        for (uint32_t i = offset; i < end; ++i) {
+            auto found = available.find(playlist.paths[i]);
+            auto entry = found == available.end() ? cJSON_CreateObject() : trackJson(found->second);
+            if (found == available.end()) {
+                cJSON_AddNullToObject(entry, "id");
+                cJSON_AddStringToObject(entry, "path", playlist.paths[i].c_str());
+                cJSON_AddStringToObject(entry, "title", basename(playlist.paths[i]).c_str());
+            }
+            cJSON_AddBoolToObject(entry, "missing", found == available.end());
+            cJSON_AddNumberToObject(entry, "position", i);
+            cJSON_AddItemToArray(tracks, entry);
+        }
+        cJSON_AddNumberToObject(json, "next_offset", end < playlist.paths.size() ? int(end) : -1);
+    }
+    return json;
 }
 void App::saveSettings() {
     preferences.putBool("wifi", settings.wifi);
@@ -142,7 +284,7 @@ cJSON* App::status() {
     auto s = audio.state();
     auto object = cJSON_CreateObject();
     cJSON_AddStringToObject(object, "name", "Cardtunes");
-    cJSON_AddStringToObject(object, "version", "0.1.2");
+    cJSON_AddStringToObject(object, "version", "0.2.0");
     cJSON_AddStringToObject(object, "state", playbackName(s.playback));
     cJSON_AddItemToObject(object, "track", trackJson(s.track));
     cJSON_AddNumberToObject(object, "position_ms", s.positionMs);
@@ -153,6 +295,9 @@ cJSON* App::status() {
     cJSON_AddBoolToObject(object, "sd_mounted", library.mounted());
     cJSON_AddNumberToObject(object, "tracks", library.count());
     cJSON_AddNumberToObject(object, "queue_count", order.queue().size());
+    cJSON_AddNumberToObject(object, "active_playlist_id", activePlaylist);
+    cJSON_AddStringToObject(object, "playlist_name", playlistName.c_str());
+    cJSON_AddNumberToObject(object, "playlist_tracks", order.size());
     cJSON_AddNumberToObject(object, "heap_free", ESP.getFreeHeap());
     cJSON_AddNumberToObject(object, "heap_min", ESP.getMinFreeHeap());
     cJSON_AddNumberToObject(object, "uptime_ms", millis());

@@ -42,9 +42,37 @@ void Web::begin() {
         for (auto id : app_.order.queue()) cJSON_AddItemToArray(tracks, app_.trackJson(id));
         server_.send(200, "application/json", jsonString(json));
     });
+    server_.on("/api/playlists", HTTP_GET, [&] {
+        if (!authorized()) { error(401, "Access key required"); return; }
+        uint32_t id = 0, offset = 0, limit = 32;
+        if ((server_.hasArg("id") && (!parseNumber(server_.arg("id"), Playlists::MaxLists, id) || !id)) ||
+            (server_.hasArg("offset") && !parseNumber(server_.arg("offset"), Playlists::MaxTracks, offset)) ||
+            (server_.hasArg("limit") && (!parseNumber(server_.arg("limit"), 32, limit) || !limit))) { error(400, "Invalid playlist page"); return; }
+        auto json = app_.playlistJson(id, offset, limit);
+        if (!json) { error(404, app_.playlists.error().c_str()); return; }
+        server_.sendHeader("Cache-Control", "no-store");
+        server_.send(200, "application/json", jsonString(json));
+    });
+    server_.on("/api/playlists", HTTP_POST, [&] {
+        if (!authorized()) { error(401, "Access key required"); return; }
+        uint32_t id = 0, to = 0;
+        String action = server_.arg("action"), value = server_.arg("value"), message;
+        if (value.length() > 63 || (action != "create" && (!parseNumber(server_.arg("id"), Playlists::MaxLists, id) || !id)) ||
+            (action == "move" && !parseNumber(server_.arg("to"), Playlists::MaxTracks - 1, to))) { error(400, "Invalid playlist parameters"); return; }
+        if (!app_.editPlaylist(action, id, value, to, message)) { error(400, message); return; }
+        auto json = cJSON_CreateObject(); cJSON_AddBoolToObject(json, "ok", true); cJSON_AddNumberToObject(json, "id", id);
+        server_.send(action == "create" ? 201 : 200, "application/json", jsonString(json));
+    });
     server_.on("/api/control", HTTP_POST, [&] {
         if (!authorized()) { error(401, "Access key required"); return; }
         String message;
+        if (server_.arg("action") == "playlist" && server_.hasArg("track")) {
+            uint32_t id = 0, track = 0;
+            if ((server_.arg("value") != "all" && (!parseNumber(server_.arg("value"), Playlists::MaxLists, id) || !id)) ||
+                !parseNumber(server_.arg("track"), Library::MaxTracks, track)) { error(400, "Invalid playlist track"); return; }
+            if (!app_.selectPlaylist(id, true, message, track)) { error(400, message); return; }
+            server_.send(202, "application/json", "{\"ok\":true}"); return;
+        }
         if (!app_.control(server_.arg("action"), server_.arg("value"), message)) { error(400, message.isEmpty() ? "Command unavailable" : message); return; }
         server_.send(202, "application/json", "{\"ok\":true}");
     });

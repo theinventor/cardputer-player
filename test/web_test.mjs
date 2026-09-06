@@ -1,0 +1,97 @@
+import assert from 'node:assert/strict';
+import { mkdirSync } from 'node:fs';
+import { createPreviewServer } from './web-preview.mjs';
+const {chromium} = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
+const mock=createPreviewServer();
+await new Promise(resolve=>mock.server.listen(0,'127.0.0.1',resolve));
+const origin=`http://127.0.0.1:${mock.server.address().port}`;
+const browser=await chromium.launch({headless:true});
+mkdirSync('build/screenshots',{recursive:true});
+try {
+  const page=await browser.newPage({viewport:{width:1280,height:900}});
+  const errors=[];page.on('pageerror',error=>errors.push(error.message));
+  await page.goto(origin);
+  await page.waitForFunction(()=>document.querySelectorAll('#tracks li').length===4);
+  await page.getByRole('button',{name:'New playlist',exact:true}).click();
+  await page.locator('#playlistName').fill('Weekend & friends');
+  await page.getByRole('button',{name:'Save',exact:true}).click();
+  await page.waitForFunction(()=>document.querySelector('#libraryTitle').textContent==='Weekend & friends');
+  const id=Number(await page.locator('#playlistPicker').inputValue());
+  assert.equal(mock.lists.get(id).name,'Weekend & friends');
+  assert.equal(await page.locator('#empty').innerText(),'Playlist is empty');
+  await page.getByRole('button',{name:'Play selected list',exact:true}).click();
+  await page.waitForFunction(()=>document.querySelector('#notice').textContent==='Playlist has no available tracks');
+  assert.equal(mock.state.active_playlist_id,1);
+  await page.locator('#playlistPicker').selectOption('0');
+  await page.waitForFunction(()=>document.querySelectorAll('#tracks li').length===4);
+  for(const title of ['Morning Drive','Desert Radio','Pacific Coast']) {
+    await page.getByRole('button',{name:`Add ${title} to playlist`,exact:true}).click();
+    await page.locator('#playlistDestination').selectOption(String(id));
+    await page.getByRole('button',{name:'Add',exact:true}).click();
+    await page.waitForFunction(()=>!document.querySelector('#playlistDialog').open);
+    await page.waitForFunction(()=>!document.querySelector('#savePlaylist').disabled);
+  }
+  assert.deepEqual(mock.lists.get(id).ids,[0,1,2]);
+  await page.locator('#playlistPicker').selectOption(String(id));
+  await page.waitForFunction(()=>document.querySelectorAll('#tracks li').length===3);
+  assert.deepEqual(await page.locator('#tracks .name').allTextContents(),['Morning Drive','Desert Radio','Pacific Coast']);
+  const controlsBefore=mock.requests.filter(r=>r.path==='/api/control').length;
+  await page.getByRole('button',{name:'Play Pacific Coast',exact:true}).click();
+  await page.waitForFunction(()=>document.querySelector('#title').textContent==='Pacific Coast'&&document.querySelector('#playbackScope').textContent.includes('Weekend & friends'));
+  assert.equal(mock.requests.filter(r=>r.path==='/api/control').length,controlsBefore+1,'Switch scope and play chosen track in one request');
+  assert.equal(mock.state.track.id,2);
+  await page.getByRole('button',{name:'Move Pacific Coast up',exact:true}).click();
+  await page.waitForFunction(()=>document.querySelectorAll('#tracks .name')[1]?.textContent==='Pacific Coast');
+  assert.deepEqual(mock.lists.get(id).ids,[0,2,1]);
+  await page.getByRole('button',{name:'Remove Desert Radio',exact:true}).click();
+  await page.waitForFunction(()=>document.querySelectorAll('#tracks li').length===2);
+  await page.getByRole('button',{name:'Rename playlist',exact:true}).click();
+  await page.locator('#playlistName').fill('A'.repeat(63));
+  await page.getByRole('button',{name:'Save',exact:true}).click();
+  await page.waitForFunction(()=>document.querySelector('#libraryTitle').textContent.length===63);
+  await page.getByRole('button',{name:'Play selected list',exact:true}).click();
+  await page.waitForFunction(()=>document.querySelector('#playbackScope').textContent.includes('A'.repeat(63)));
+  assert.equal(mock.state.active_playlist_id,id);
+  await page.getByRole('button',{name:'Shuffle',exact:true}).click();
+  await page.waitForFunction(()=>document.querySelector('#shuffle').getAttribute('aria-pressed')==='true');
+  await page.locator('#repeat').selectOption('off');
+  await page.waitForFunction(()=>document.querySelector('#repeat').value==='off');
+  await page.reload();
+  await page.waitForFunction(()=>document.querySelectorAll('#playlistPicker option').length===4);
+  await page.locator('#playlistPicker').selectOption(String(id));
+  await page.waitForFunction(()=>document.querySelectorAll('#tracks li').length===2);
+  for(const [name,viewport] of [['desktop',{width:1280,height:900}],['mobile',{width:390,height:844}],['narrow',{width:320,height:740}]]) {
+    await page.setViewportSize(viewport);
+    await page.screenshot({path:`build/screenshots/playlists-${name}.png`,fullPage:true});
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,`${name} horizontal overflow`);
+    const overlaps=await page.locator('#tracks li').evaluateAll(rows=>rows.flatMap(row=>{
+      const boxes=[...row.children].map(el=>({name:el.className,r:el.getBoundingClientRect()}));
+      return boxes.flatMap((a,i)=>boxes.slice(i+1).filter(b=>Math.min(a.r.right,b.r.right)-Math.max(a.r.left,b.r.left)>1&&Math.min(a.r.bottom,b.r.bottom)-Math.max(a.r.top,b.r.top)>1).map(b=>`${a.name} overlaps ${b.name}`));
+    }));assert.deepEqual(overlaps,[],`${name} row overlap`);
+    const pixels=await page.locator('#spectrum').evaluate(canvas=>[...canvas.getContext('2d').getImageData(0,0,canvas.width,canvas.height).data].filter((v,i)=>i%4===3&&v>0).length);
+    assert(pixels>100,'Spectrum must render');
+  }
+  await page.locator('#playlistPicker').selectOption('2');
+  await page.waitForFunction(()=>document.querySelectorAll('#tracks li').length===2&&document.querySelector('#libraryTitle').textContent==='Evening');
+  assert.equal(await page.getByRole('button',{name:'Play Missing Song.mp3',exact:true}).isDisabled(),true);
+  assert.equal(await page.locator('#playlistCount').innerText(),'2 tracks / 1 available');
+  await page.getByRole('button',{name:'Rename playlist',exact:true}).click();
+  await page.locator('#playlistName').fill('Failure test');
+  mock.failNext('Cannot write playlist; check microSD space');
+  await page.getByRole('button',{name:'Save',exact:true}).click();
+  await page.waitForFunction(()=>document.querySelector('#dialogError').textContent.includes('Cannot write playlist'));
+  assert.equal(await page.locator('#playlistDialog').evaluate(el=>el.open),true);
+  assert.equal(mock.lists.get(2).name,'Evening');
+  await page.getByRole('button',{name:'Cancel',exact:true}).click();
+  await page.locator('#playlistPicker').selectOption(String(id));
+  await page.getByRole('button',{name:'Delete playlist',exact:true}).click();
+  await page.getByRole('button',{name:'Delete',exact:true}).click();
+  await page.waitForFunction(()=>document.querySelector('#playlistPicker').value==='0');
+  assert.equal(mock.lists.has(id),false);assert.equal(mock.tracks.length,4);
+  assert.equal(mock.state.active_playlist_id,0);
+  assert.deepEqual(errors,[]);
+  console.log('Web playlist CRUD, pagination, ordering, scope, missing files, errors, and responsive screenshots passed (mock API; no device used).');
+} finally {
+  await browser.close();
+  await new Promise(resolve=>mock.server.close(resolve));
+}

@@ -10,7 +10,7 @@ firmware updates. No cloud account or Home Assistant is involved.
 | Key | Action |
 | --- | --- |
 | Space | Play / pause |
-| Tab | Playing / Library / Settings |
+| Tab | Playing / Library / Playlists / Settings |
 | N / B | Next / previous track |
 | [ / ] | Volume down / up |
 | , / / | Seek backward / forward 10 seconds |
@@ -18,8 +18,8 @@ firmware updates. No cloud account or Home Assistant is involved.
 | R | Cycle repeat off / all / one |
 | V | Toggle spectrum display |
 | F | Search the library; Enter finishes text entry |
-| ; / . | Move up / down in Library or Settings |
-| Enter | Play the selected track or edit the selected setting |
+| ; / . | Move up / down in Library, Playlists, or Settings |
+| Enter | Play the selected track/list or edit the selected setting |
 | Q | Add the selected library track to the queue |
 | Backtick | Return to Playing |
 | Fn + backtick | Escape from text entry |
@@ -29,18 +29,46 @@ firmware updates. No cloud account or Home Assistant is involved.
 The first key after screen sleep wakes the screen **and** performs its action.
 Explicitly locked keys stay disabled until G0 is held again.
 
-## Queue and Playback Order
+## Saved Playlists
 
-Cardtunes currently has a temporary Up next queue, not saved, named playlists or
-M3U playlist support. In Library, select a track with `;` / `.` and press `Q` to
-append it. `Enter` plays a selected track immediately. In the browser, use the
-`+` beside a song to append it and the Up next section to inspect or clear the queue.
+Firmware **0.2.0** adds up to **16 named playlists with 128 unique songs each**.
+A song can belong to several playlists without duplicating its MP3 file.
 
-The queue holds up to 64 entries and plays in insertion order. It clears on
-reboot or library rescan. Once it empties, playback continues through the full
-library. Searching or keeping files in an album folder does not restrict playback
-to that folder. Shuffle affects library order, not the manually queued sequence;
-Repeat one keeps repeating the current song until changed or manually skipped.
+- **On the Cardputer:** press Tab to reach Playlists, select a list with `;` / `.`,
+  and press Enter. Choose All music to return to whole-library playback.
+- **In the browser:** use New playlist (+) beside the playlist selector. Choose
+  All music, then use each song's list/music icon to add it to a saved list.
+  Select a list to view it; the play button beside the selector starts that list.
+  Browsing a list does not interrupt playback. Use the pencil to rename, arrows
+  to reorder, or X to remove entries/delete the list. Deleting a list never
+  deletes MP3s; deleting the active list stops playback and selects All music.
+- **Shuffle and repeat** stay inside the active playlist. Repeat off ends at the
+  last song; Repeat all loops this list; Repeat one repeats the current song.
+  Explicitly playing a song from All music/the device's Library exits playlist mode.
+- **Persistence:** lists live at `/.cardtunes/playlist-N.json` on the microSD card.
+  Entries use absolute song paths, not changing library IDs. Names, membership,
+  and order survive reboot, rescan, and normal firmware updates. The active list
+  is remembered in NVS along with the existing paused track/position resume.
+  Writes use a verified temporary file and a recoverable backup. Keep external
+  backups too; this cannot protect against card failure or arbitrary FAT corruption.
+- **Missing songs:** unavailable paths remain visible in the browser and are
+  skipped during playback. An empty/all-missing list cannot start; the current
+  playback selection is left unchanged. Removing the currently playing entry
+  stops playback. A missing/corrupt active playlist does not fall back to unrelated music.
+
+Names are 1-63 UTF-8 bytes, with no surrounding whitespace/control characters;
+duplicate names (ASCII case-insensitive) and duplicate entries are rejected.
+The serialized file is limited to 32 KiB. Standard M3U import/export is not included.
+
+### Temporary Queue
+
+The separate Up next queue still holds up to 64 entries and clears on reboot,
+rescan, playlist switches, or membership/order edits to the active playlist.
+In Library, `Q` appends a song; in the browser's All music view, `+` appends it.
+Only songs inside the active playlist can be queued while in playlist mode.
+When the queue empties, playback returns to the active list, not the whole library.
+Shuffle does not change manually queued order. Repeat one takes precedence over
+automatic queue advancement until changed or manually skipped.
 
 ## Music and Wi-Fi
 
@@ -92,6 +120,14 @@ build/cardtunes list Redbone
 build/cardtunes play 0
 build/cardtunes pause
 build/cardtunes volume 20
+build/cardtunes playlist
+build/cardtunes playlist create "Road trip"
+build/cardtunes playlist add 1 2
+build/cardtunes playlist add 1 7
+build/cardtunes playlist show 1
+build/cardtunes playlist move 1 1 0
+build/cardtunes playlist play 1
+build/cardtunes playlist play all
 build/cardtunes upload /path/to/Albums
 build/cardtunes screen build/display.bmp
 build/cardtunes firmware .pio/build/cardputer-adv/firmware.bin
@@ -101,6 +137,30 @@ build/cardtunes serve YOUR_TAILSCALE_IP:8174
 Pairing stores credentials in a mode-0600 file in the OS user config directory.
 `cardtunes help` lists commands; `CARDTUNES_HOST` and `CARDTUNES_TOKEN` override
 saved settings. Run the proxy while this computer can reach the Cardputer.
+Use the ID returned by `playlist create`; it is not always 1. Track IDs come from
+`list`. Remove/move commands take zero-based **playlist positions**, not track IDs.
+`play ID` respects the current scope; `play-library ID` explicitly leaves it.
+
+### Playlist API
+
+All routes require the existing `Authorization: Bearer DEVICE_ACCESS_KEY` header.
+
+| Request | Result / form fields |
+| --- | --- |
+| `GET /api/playlists` | List summaries and active playlist ID (0 means All music) |
+| `GET /api/playlists?id=1&offset=0&limit=32` | Ordered entries, zero-based positions, missing flags, available count, next offset (-1 when finished) |
+| `POST /api/playlists` | `action=create&value=NAME` returns the new `id` |
+| `POST /api/playlists` | `action=rename&id=ID&value=NAME` |
+| `POST /api/playlists` | `action=add&id=ID&value=TRACK_ID` |
+| `POST /api/playlists` | `action=remove&id=ID&value=POSITION` |
+| `POST /api/playlists` | `action=move&id=ID&value=FROM&to=TO` |
+| `POST /api/playlists` | `action=delete&id=ID` |
+| `POST /api/control` | `action=playlist&value=ID` (or `all`) starts the scope |
+
+Status includes `active_playlist_id`, `playlist_name`, and `playlist_tracks`.
+Add `track=TRACK_ID` to the playlist control to start a particular member atomically,
+without briefly playing the first song. Out-of-scope tracks are rejected before switching.
+Playlist pages are capped at 32 entries. There is no new cloud service or credential.
 
 USB serial accepts newline-delimited JSON commands, including `{"cmd":"status"}`
 and `{"cmd":"info"}`. **Info includes the access key**: never publish its output.
@@ -121,7 +181,24 @@ go vet ./...
 
 Native tests decode generated CBR/VBR/mono MP3s, compare seek PCM samples, exercise
 malformed metadata, validate paths and playback ordering, and check key rollover.
-They run with address/undefined-behavior sanitizers. FFmpeg and Clang are required.
+They run with address/undefined-behavior sanitizers. FFmpeg, Clang, pkg-config, and
+the host cJSON development library are required (macOS: `brew install cjson pkg-config`).
+The firmware uses cJSON already supplied by ESP-IDF, with no new runtime dependency.
+Playlist tests cover persistence, write failures, backup recovery, validation,
+capacity limits, queue isolation, shuffle, repeat, and preserving saved order.
+Go tests cover authenticated playlist commands, pagination, errors, and validation.
+
+With Playwright installed, `node test/web_test.mjs` tests the actual web UI against
+a **mock API**, including CRUD, ordering, missing songs, write errors, pagination,
+and desktop/390px/320px screenshots. `PLAYWRIGHT_MODULE` can point to an existing
+Playwright installation's `index.mjs`. Screenshots stay under ignored `build/`.
+`PREVIEW_HOST=YOUR_TAILSCALE_IP node test/web-preview.mjs` starts a mock browser
+preview on port 8175; its songs/state are fixtures, reset on restart, and do not
+control any hardware or play audio. It uses no real device credentials.
+
+**0.2.0 has been built and tested locally, not flashed or validated on hardware.**
+Cardputer key layout, SD persistence across an actual reboot, and heap headroom
+under maximum-size playlists must be checked when the device is reachable again.
 `node test/device.mjs` uses the paired device for a live control and screen-sleep
 regression test; it briefly changes playback and volume, then leaves music playing.
 `node test/sd-device.mjs '/Music/Artist/Track.mp3'` verifies playback, seeking,

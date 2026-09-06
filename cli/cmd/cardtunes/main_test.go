@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"net"
 	"net/http"
@@ -12,6 +13,101 @@ import (
 	"strings"
 	"testing"
 )
+
+func TestPlaylistCommands(t *testing.T) {
+	for _, tc := range []struct {
+		args                                []string
+		path, method, action, id, value, to string
+	}{
+		{[]string{}, "/api/playlists", "GET", "", "", "", ""},
+		{[]string{"create", "Road & Radio"}, "/api/playlists", "POST", "create", "", "Road & Radio", ""},
+		{[]string{"rename", "2", "Evening \"Mix\""}, "/api/playlists", "POST", "rename", "2", "Evening \"Mix\"", ""},
+		{[]string{"add", "2", "42"}, "/api/playlists", "POST", "add", "2", "42", ""},
+		{[]string{"remove", "2", "0"}, "/api/playlists", "POST", "remove", "2", "0", ""},
+		{[]string{"move", "2", "3", "0"}, "/api/playlists", "POST", "move", "2", "3", "0"},
+		{[]string{"delete", "2"}, "/api/playlists", "POST", "delete", "2", "", ""},
+		{[]string{"play", "2"}, "/api/control", "POST", "playlist", "", "2", ""},
+		{[]string{"play", "all"}, "/api/control", "POST", "playlist", "", "all", ""},
+	} {
+		t.Run(strings.Join(tc.args, " "), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Header.Get("Authorization") != "Bearer test-key" || r.URL.Path != tc.path || r.Method != tc.method {
+					t.Errorf("incorrect playlist request: %s %s", r.Method, r.URL)
+				}
+				if err := r.ParseForm(); err != nil {
+					t.Error(err)
+				}
+				for field, want := range map[string]string{"action": tc.action, "id": tc.id, "value": tc.value, "to": tc.to} {
+					if r.Form.Get(field) != want {
+						t.Errorf("%s: got %q, want %q", field, r.Form.Get(field), want)
+					}
+				}
+				_, _ = w.Write([]byte(`{"ok":true}`))
+			}))
+			defer server.Close()
+			if _, err := newClient(Config{URL: server.URL, Token: "test-key"}).playlist(tc.args); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestPlaylistPaginationAndMissingFiles(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.URL.Query().Get("id") != "2" {
+			t.Error("wrong playlist")
+		}
+		if r.URL.Query().Get("offset") == "0" {
+			_, _ = w.Write([]byte(`{"id":2,"name":"Road trip","count":2,"available":1,"tracks":[{"id":42,"position":0}],"next_offset":1}`))
+		} else if r.URL.Query().Get("offset") == "1" {
+			_, _ = w.Write([]byte(`{"id":2,"name":"Road trip","count":2,"available":1,"tracks":[{"id":null,"position":1,"missing":true}],"next_offset":-1}`))
+		} else {
+			t.Error("unexpected cursor")
+			w.WriteHeader(400)
+		}
+	}))
+	defer server.Close()
+	data, err := newClient(Config{URL: server.URL, Token: "test-key"}).playlist([]string{"show", "2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		Tracks           []json.RawMessage
+		Count, Available int
+	}
+	if err = json.Unmarshal(data, &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Tracks) != 2 || result.Count != 2 || result.Available != 1 || requests != 2 {
+		t.Fatalf("bad playlist aggregation: %s", data)
+	}
+}
+
+func TestPlaylistValidationDoesNotContactDevice(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("invalid command contacted device")
+		w.WriteHeader(500)
+	}))
+	defer server.Close()
+	client := newClient(Config{URL: server.URL, Token: "test-key"})
+	for _, args := range [][]string{{"create"}, {"create", ""}, {"create", strings.Repeat("x", 64)}, {"create", "bad\nname"}, {"rename", "2"}, {"rename", "0", "Name"}, {"delete", "17"}, {"add", "1", "-1"}, {"move", "1", "0"}, {"move", "1", "0", "128"}, {"remove", "1", "128"}, {"show", "all"}, {"play", "0"}, {"play", "missing"}, {"unknown"}} {
+		if _, err := client.playlist(args); err == nil {
+			t.Errorf("accepted %v", args)
+		}
+	}
+}
+
+func TestPlaylistRejectsNonAdvancingCursor(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"id":1,"tracks":[],"next_offset":0}`))
+	}))
+	defer server.Close()
+	if _, err := newClient(Config{URL: server.URL, Token: "test-key"}).playlist([]string{"show", "1"}); err == nil {
+		t.Fatal("accepted non-advancing cursor")
+	}
+}
 
 func TestControlAuthenticationAndEncoding(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

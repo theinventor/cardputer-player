@@ -15,3 +15,8 @@ done
   -fno-omit-frame-pointer -DMINIMP3_ONLY_MP3 -DMINIMP3_NO_SIMD -Iinclude \
   test/media_test.cpp src/media.cpp -o build/media-test
 build/media-test build/fixtures/cbr.mp3 build/fixtures/vbr.mp3 build/fixtures/mono.mp3
+read -r -a json_flags <<< "$(pkg-config --cflags --libs libcjson)"
+"${CXX:-clang++}" -std=c++17 -O1 -g -fsanitize=address,undefined \
+  -fno-omit-frame-pointer -DMINIMP3_ONLY_MP3 -DMINIMP3_NO_SIMD -Iinclude \
+  test/playlists_test.cpp src/playlists.cpp src/media.cpp "${json_flags[@]}" -o build/playlists-test
+build/playlists-test

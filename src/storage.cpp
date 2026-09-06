@@ -119,4 +119,24 @@ int Library::byPath(const char* path) {
     for (uint32_t i = 0; i < count(); ++i) if (get(i, track) && !strcmp(track.path, path)) return i;
     return -1;
 }
+bool Library::available(const char* path) {
+    SDLock lock(sdMutex);
+    File file = !strcmp(path, "/@demo.mp3") ? LittleFS.open("/demo.mp3", FILE_READ) : SD.open(path, FILE_READ);
+    return file && !file.isDirectory() && file.size() > 0;
+}
+bool SDPlaylistFiles::read(const std::string& path, std::string& data, size_t maximum) {
+    SDLock lock(sdMutex);
+    File file = SD.open(path.c_str(), FILE_READ);
+    if (!file || file.isDirectory() || file.size() > maximum) return false;
+    data.resize(file.size());
+    if (data.empty()) return true;
+    return file.read(reinterpret_cast<uint8_t*>(&data[0]), data.size()) == data.size();
+}
+bool SDPlaylistFiles::write(const std::string& path, const std::string& data) {
+    SDLock lock(sdMutex);
+    File file = SD.open(path.c_str(), FILE_WRITE);
+    if (!file) return false;
+    bool ok = file.write(reinterpret_cast<const uint8_t*>(data.data()), data.size()) == data.size();
+    file.flush(); file.close(); return ok;
+}
 }

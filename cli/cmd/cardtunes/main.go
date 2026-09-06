@@ -72,6 +72,114 @@ func (c *Client) form(path string, values url.Values) ([]byte, error) {
 func (c *Client) control(action, value string) ([]byte, error) {
 	return c.form("/api/control", url.Values{"action": {action}, "value": {value}})
 }
+func (c *Client) playlist(args []string) ([]byte, error) {
+	if len(args) == 0 {
+		return c.get("/api/playlists")
+	}
+	action := args[0]
+	if action == "show" && len(args) == 2 {
+		id, err := playlistNumber(args[1], 1, 16)
+		if err != nil {
+			return nil, err
+		}
+		var result struct {
+			ID        int               `json:"id"`
+			Name      string            `json:"name"`
+			Count     int               `json:"count"`
+			Available int               `json:"available"`
+			Tracks    []json.RawMessage `json:"tracks"`
+		}
+		offset := 0
+		for {
+			data, err := c.get("/api/playlists?" + url.Values{"id": {id}, "offset": {strconv.Itoa(offset)}}.Encode())
+			if err != nil {
+				return nil, err
+			}
+			var page struct {
+				ID        int               `json:"id"`
+				Name      string            `json:"name"`
+				Count     int               `json:"count"`
+				Available int               `json:"available"`
+				Tracks    []json.RawMessage `json:"tracks"`
+				Next      int               `json:"next_offset"`
+			}
+			if err := json.Unmarshal(data, &page); err != nil {
+				return nil, err
+			}
+			result.ID, result.Name, result.Count, result.Available = page.ID, page.Name, page.Count, page.Available
+			result.Tracks = append(result.Tracks, page.Tracks...)
+			if page.Next < 0 {
+				break
+			}
+			if page.Next <= offset || page.Next > 128 {
+				return nil, errors.New("device returned an invalid playlist cursor")
+			}
+			offset = page.Next
+		}
+		return json.Marshal(result)
+	}
+	if action == "play" && len(args) == 2 {
+		id := args[1]
+		if id != "all" {
+			var err error
+			id, err = playlistNumber(id, 1, 16)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return c.control("playlist", id)
+	}
+	counts := map[string]int{"create": 2, "rename": 3, "delete": 2, "add": 3, "remove": 3, "move": 4}
+	if counts[action] == 0 || len(args) != counts[action] {
+		return nil, errors.New("usage: playlist [show ID | create NAME | rename ID NAME | delete ID | add ID TRACK_ID | remove ID POSITION | move ID FROM TO | play ID|all]")
+	}
+	values := url.Values{"action": {action}}
+	if action == "create" {
+		values.Set("value", strings.TrimSpace(args[1]))
+	} else {
+		id, err := playlistNumber(args[1], 1, 16)
+		if err != nil {
+			return nil, err
+		}
+		values.Set("id", id)
+		if len(args) >= 3 {
+			values.Set("value", args[2])
+		}
+	}
+	if action == "create" || action == "rename" {
+		name := strings.TrimSpace(values.Get("value"))
+		if len(name) == 0 || len(name) > 63 || strings.ContainsAny(name, "\r\n\t\x00") {
+			return nil, errors.New("playlist name must be 1-63 bytes without control characters")
+		}
+		values.Set("value", name)
+	}
+	if action == "add" || action == "remove" || action == "move" {
+		max := 127
+		if action == "add" {
+			max = 10000
+		}
+		value, err := playlistNumber(args[2], 0, max)
+		if err != nil {
+			return nil, err
+		}
+		values.Set("value", value)
+	}
+	if action == "move" {
+		to, err := playlistNumber(args[3], 0, 127)
+		if err != nil {
+			return nil, err
+		}
+		values.Set("to", to)
+	}
+	return c.form("/api/playlists", values)
+}
+func playlistNumber(value string, min, max int) (string, error) {
+	n, err := strconv.Atoi(value)
+	if err != nil || n < min || n > max {
+		return "", fmt.Errorf("expected a number from %d to %d", min, max)
+	}
+	return strconv.Itoa(n), nil
+}
 func (c *Client) upload(path, destination string, firmware bool) ([]byte, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -251,6 +359,16 @@ volume 0..100               Set volume
 shuffle on|off              Shuffle playback order
 repeat off|all|one          Set repeat mode
 queue [ID]                  Read the queue or add a track
+playlist                    List saved playlists
+playlist show ID            Read a playlist (including unavailable files)
+playlist create NAME        Create an empty named playlist
+playlist rename ID NAME     Rename a playlist
+playlist add ID TRACK_ID    Add a library track to a playlist
+playlist remove ID POSITION Remove a zero-based playlist entry
+playlist move ID FROM TO    Reorder zero-based playlist positions
+playlist delete ID          Delete the list, keeping music files
+playlist play ID|all        Play only this playlist, or all music
+play-library ID             Play a library track and leave playlist mode
 clear-queue | rescan        Clear upcoming tracks or rescan microSD
 upload FILE_OR_FOLDER...    Upload MP3s, retaining album folders
 screen FILE.bmp             Capture the actual device display
@@ -297,6 +415,12 @@ func run(args []string) error {
 	}
 	c := newClient(config)
 	switch command {
+	case "playlist":
+		data, err := c.playlist(args)
+		if err != nil {
+			return err
+		}
+		return output(data)
 	case "pair":
 		if _, err = c.get("/api/status"); err != nil {
 			return err
@@ -454,7 +578,7 @@ func run(args []string) error {
 		command = "enqueue"
 	}
 	switch command {
-	case "play", "pause", "toggle", "stop", "next", "previous", "seek", "volume", "shuffle", "repeat", "enqueue", "clear-queue", "rescan":
+	case "play", "play-library", "pause", "toggle", "stop", "next", "previous", "seek", "volume", "shuffle", "repeat", "enqueue", "clear-queue", "rescan":
 		data, err := c.control(command, value)
 		if err != nil {
 			return err

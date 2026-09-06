@@ -41,7 +41,7 @@ async function findTrack() {
 }
 let track = await findTrack();
 assert.ok(track.path.startsWith('/Music/'), 'Test must use microSD, not the flash demo');
-await control('play', track.id);
+await control('play-library', track.id);
 let playing = await until(s => s.state === 'playing' && s.track?.path === path);
 assert.ok(playing.duration_ms > 65000, 'Use a track at least 65 seconds long');
 await control('seek', 30);
@@ -52,7 +52,7 @@ await wait(500);
 assert.equal((await status()).position_ms, paused.position_ms);
 await control('rescan');
 track = await findTrack();
-await control('play', track.id);
+await control('play-library', track.id);
 await until(s => s.state === 'playing' && s.track?.path === path);
 await control('seek', 60);
 await until(s => s.position_ms >= 60000 && s.position_ms < 62000);

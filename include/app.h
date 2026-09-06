@@ -16,6 +16,8 @@ struct Settings {
 class App {
 public:
     Library library;
+    SDPlaylistFiles playlistFiles{library};
+    Playlists playlists{playlistFiles};
     AudioPlayer audio;
     Order order;
     Settings settings;
@@ -24,6 +26,8 @@ public:
     String notice;
     bool ready = false;
     uint32_t keyboardEvents = 0, loopGapMs = 0;
+    uint32_t activePlaylist = 0;
+    String playlistName = "All music";
     bool begin();
     void tick();
     bool play(int id, uint32_t position = 0, bool paused = false);
@@ -35,12 +39,17 @@ public:
     void configureWifi(const String& ssid, const String& password);
     cJSON* status();
     cJSON* trackJson(int id);
+    cJSON* playlistJson(uint32_t id, uint32_t offset = 0, uint32_t limit = 32);
+    bool selectPlaylist(uint32_t id, bool start, String& error, int track = -1);
+    bool editPlaylist(const String& action, uint32_t& id, const String& value, uint32_t to, String& error);
     static void jsonPrint(cJSON* json);
 private:
     uint32_t lastSave_ = 0, handledEnd_ = 0, lastWifiAttempt_ = 0, lastTick_ = 0;
     Playback lastPlayback_ = Playback::Stopped;
     bool wasConnected_ = false;
     String serialLine_;
+    std::vector<uint32_t> resolvePlaylist(const Playlist& playlist);
+    void restorePlaylist();
     void serial();
 };
 String jsonString(cJSON* json);
