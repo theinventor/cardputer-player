@@ -98,6 +98,7 @@ void Web::uploadChunk(bool firmware) {
     if (upload.status == UPLOAD_FILE_START) {
         uploadAllowed_ = false; firmware_ = firmware; uploadError_ = ""; received_ = 0; uploadStatus_ = 400;
         if (!authorized()) { uploadStatus_ = 401; uploadError_ = "Access key required"; return; }
+        if (app_.games.active() != GameId::None) { uploadStatus_ = 409; uploadError_ = "Exit the game before uploading"; return; }
         if (!parseNumber(server_.arg("size"), firmware ? 0x300000 : 256 * 1024 * 1024, expected_) || !expected_) { uploadError_ = "A valid size query parameter is required"; return; }
         if (!firmware && !app_.library.mounted()) { uploadStatus_ = 503; uploadError_ = "Insert a microSD card and rescan before uploading music"; return; }
         if (!firmware) {

@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Cardtunes Games Preview</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#101513;color:#f2f4f1;font:14px system-ui;letter-spacing:0}main{max-width:780px;margin:auto;padding:24px 16px}header,nav{display:flex;align-items:center;gap:8px;flex-wrap:wrap}header{justify-content:space-between;margin-bottom:20px}h1{font-size:22px;margin:0}button{font:inherit;color:inherit;background:#242c29;border:1px solid #536058;border-radius:4px;padding:9px 12px;cursor:pointer}button[aria-pressed=true]{background:#d2f36b;color:#101513}canvas{display:block;width:100%;aspect-ratio:240/135;image-rendering:pixelated;margin:20px 0}#pad{display:grid;grid-template-columns:repeat(3,52px);gap:6px;width:max-content;margin:20px auto}#pad button{height:44px;padding:0;font-size:20px}.up{grid-column:2}.left{grid-column:1}#state{color:#a3aea5;font-size:12px}
+</style>
+<main><header><h1>Cardtunes Games</h1><span id="state">Native engine preview</span></header>
+<nav aria-label="Games"><button data-game="blocks">Falling Blocks</button><button data-game="breakout">Breakout</button><button data-game="2048">2048</button></nav>
+<canvas id="screen" width="240" height="135" tabindex="0" aria-label="Game screen"></canvas>
+<nav><button data-key="pause">Pause</button><button id="restart">New game</button><button data-key="exit">Exit</button></nav>
+<div id="pad"><button class="up" data-key="up" aria-label="Up">&#8593;</button><button class="left" data-key="left" aria-label="Left">&#8592;</button><button data-key="primary" aria-label="Primary action">&#9679;</button><button data-key="right" aria-label="Right">&#8594;</button><button class="up" data-key="down" aria-label="Down">&#8595;</button></div></main>
+<script>
+const canvas=document.querySelector('canvas'),ctx=canvas.getContext('2d'),held=new Set();let busy=false,frame={},queue=[],sequence=0;
+const enqueue=command=>queue.push({...command,sequence:++sequence});enqueue({start:'blocks'});
+window.gameFrame=()=>frame;
+window.gameSequence=()=>sequence;
+const keys={ArrowLeft:'left',ArrowRight:'right',ArrowUp:'up',ArrowDown:'down',a:'left',d:'right',w:'up',s:'down',' ':'primary',Enter:'primary',p:'pause',Tab:'pause',Escape:'exit','`':'exit'};
+document.addEventListener('keydown',e=>{if(e.target===canvas && e.key!=='Tab' && keys[e.key]){e.preventDefault();held.add(keys[e.key]);if(!e.repeat)enqueue({key:keys[e.key]});}});
+document.addEventListener('keyup',e=>held.delete(keys[e.key]));
+window.addEventListener('blur',()=>{held.clear();enqueue({pause:true});});
+document.querySelectorAll('[data-game]').forEach(b=>b.onclick=()=>{enqueue({start:b.dataset.game});canvas.focus();});
+document.querySelectorAll('[data-key]').forEach(b=>{b.onclick=()=>{enqueue({key:b.dataset.key});canvas.focus();};if(['left','right'].includes(b.dataset.key)){b.onpointerdown=e=>{b.setPointerCapture(e.pointerId);held.add(b.dataset.key);};b.onpointerup=b.onpointercancel=()=>held.delete(b.dataset.key);}});
+document.querySelector('#restart').onclick=()=>{enqueue({restart:true});canvas.focus();};
+async function tick(){if(busy)return;busy=true;try{const response=await fetch('/frame',{method:'POST',body:JSON.stringify({...queue.shift(),elapsed:33,left:held.has('left'),right:held.has('right')})});if(!response.ok)throw Error('Driver error');frame=await response.json();
+for(const[k,s,x,y,w,h,color,scale]of frame.ops){ctx.fillStyle='#'+color.toString(16).padStart(6,'0');if(k==='rect')ctx.fillRect(x,y,w,h);else{ctx.font=`${8*scale}px monospace`;ctx.textBaseline='top';ctx.fillText(s,x,y);}}
+document.querySelectorAll('[data-game]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.game===frame.game)));
+document.querySelector('#state').textContent=`${frame.game} / ${frame.paused?'paused':'running'} / ${frame.score}`;
+}catch(e){document.querySelector('#state').textContent=e.message;}finally{busy=false;}}
+setInterval(tick,33);tick();
+</script></html>

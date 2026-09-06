@@ -3,6 +3,7 @@
 #include <esp_system.h>
 #include <map>
 #include <string_view>
+#include <cstdlib>
 
 namespace ct {
 String jsonString(cJSON* json) {
@@ -38,6 +39,8 @@ bool App::begin() {
     M5.Display.setBrightness(settings.brightness);
     library.begin();
     playlists.begin();
+    std::srand(esp_random());
+    gameStore.load(games);
     order.seed(esp_random()); order.reset(library.count());
     order.shuffle(preferences.getBool("shuffle", false));
     uint8_t repeat = preferences.getUChar("repeat", 1);
@@ -55,6 +58,7 @@ bool App::begin() {
     return ready;
 }
 bool App::play(int id, uint32_t position, bool paused) {
+    if (games.active() != GameId::None) return false;
     Track track;
     if (!ready || id < 0 || !order.contains(id) || !library.get(id, track)) return false;
     AudioCommand cmd; cmd.action = AudioAction::Play; cmd.track = id;
@@ -65,6 +69,16 @@ bool App::play(int id, uint32_t position, bool paused) {
     return true;
 }
 bool App::control(const String& action, const String& value, String& error) {
+    if (action == "game") return startGame(gameId(value.c_str()), error);
+    if (action == "game-exit") return exitGame(error);
+    if (action == "game-key") {
+        auto key = gameKey(value.c_str());
+        if (games.active() == GameId::None || key == GameKey::None) { error = "No active game or invalid game key"; return false; }
+        if (!games.input(key)) return exitGame(error);
+        if (games.paused()) saveGames();
+        return true;
+    }
+    if (games.active() != GameId::None && action != "volume") { error = "Exit the game before changing music"; return false; }
     uint32_t n = 0;
     auto number = [&](uint32_t limit) { if (!parseNumber(value, limit, n)) { error = "Invalid numeric value"; return false; } return true; };
     AudioCommand cmd;
@@ -109,10 +123,12 @@ bool App::control(const String& action, const String& value, String& error) {
     return true;
 }
 bool App::rescan() {
+    if (games.active() != GameId::None) return false;
     if (!audio.stopAndWait()) return false;
     saveResume();
     notice = "Scanning music";
     bool ok = library.mounted() ? library.scan() : library.begin();
+    if (library.mounted() && !gameStore.restored()) { Games card; if (gameStore.load(card)) games.mergeSaved(card); }
     order.reset(library.count()); currentTrack = Track{};
     playlists.begin(); restorePlaylist();
     notice = ok ? "Library updated" : "No microSD detected";
@@ -144,6 +160,7 @@ void App::restorePlaylist() {
     }
 }
 bool App::selectPlaylist(uint32_t id, bool start, String& error, int track) {
+    if (games.active() != GameId::None) { error = "Exit the game before changing music"; return false; }
     Playlist playlist;
     std::vector<uint32_t> ids;
     if (id) {
@@ -165,6 +182,7 @@ bool App::selectPlaylist(uint32_t id, bool start, String& error, int track) {
     return true;
 }
 bool App::editPlaylist(const String& action, uint32_t& id, const String& value, uint32_t to, String& error) {
+    if (games.active() != GameId::None) { error = "Exit the game before editing playlists"; return false; }
     if (action == "create") {
         if (playlists.create(value.c_str(), id)) return true;
         error = playlists.error().c_str(); return false;
@@ -284,7 +302,15 @@ cJSON* App::status() {
     auto s = audio.state();
     auto object = cJSON_CreateObject();
     cJSON_AddStringToObject(object, "name", "Cardtunes");
-    cJSON_AddStringToObject(object, "version", "0.2.0");
+    cJSON_AddStringToObject(object, "version", "0.3.0");
+    auto game = cJSON_AddObjectToObject(object, "game");
+    cJSON_AddStringToObject(game, "id", gameSlug(games.active()));
+    cJSON_AddStringToObject(game, "name", gameName(games.active()));
+    cJSON_AddBoolToObject(game, "paused", games.paused());
+    cJSON_AddBoolToObject(game, "over", games.over());
+    cJSON_AddNumberToObject(game, "score", games.score(games.active()));
+    cJSON_AddNumberToObject(game, "best", games.best(games.active()));
+    cJSON_AddStringToObject(game, "save_error", gameStore.error().c_str());
     cJSON_AddStringToObject(object, "state", playbackName(s.playback));
     cJSON_AddItemToObject(object, "track", trackJson(s.track));
     cJSON_AddNumberToObject(object, "position_ms", s.positionMs);
@@ -346,11 +372,14 @@ void App::serial() {
 }
 void App::tick() {
     uint32_t now = millis();
+    bool wasPaused = games.paused();
+    games.tick(lastTick_ ? now - lastTick_ : 0);
+    if (games.active() != GameId::None && ((!wasPaused && games.paused()) || now - lastGameSave_ >= 30000)) saveGames();
     if (lastTick_) loopGapMs = std::max(loopGapMs, now - lastTick_);
     lastTick_ = now;
     serial();
     auto state = audio.state();
-    if (state.playback == Playback::Ended && state.epoch != handledEnd_) {
+    if (games.active() == GameId::None && state.playback == Playback::Ended && state.epoch != handledEnd_) {
         handledEnd_ = state.epoch;
         saveResume(); int next = order.next(true); if (next >= 0) play(next);
     }
@@ -363,4 +392,27 @@ void App::tick() {
     wasConnected_ = connected;
     if (settings.wifi && !connected && millis() - lastWifiAttempt_ >= 30000) connectWifi();
 }
+bool App::startGame(GameId id, String& error) {
+    if (id == GameId::None) { error = "Expected blocks, breakout, or 2048"; return false; }
+    if (games.active() != GameId::None) { error = "Exit the current game first"; return false; }
+    auto before = audio.state();
+    if (before.playback == Playback::Loading) { error = "Wait for the track to finish loading"; return false; }
+    if (!audio.pauseAndWait(&resumeAfterGame_)) { error = "Player is busy; retry shortly"; return false; }
+    saveResume(); games.start(id); lastGameSave_ = millis();
+    return true;
+}
+bool App::exitGame(String& error) {
+    if (games.active() == GameId::None) return true;
+    if (resumeAfterGame_) {
+        AudioCommand cmd; cmd.action = AudioAction::Resume;
+        if (!audio.send(cmd)) { error = "Player is busy; retry exit"; return false; }
+    }
+    games.leave(); saveGames(); resumeAfterGame_ = false; return true;
+}
+void App::gameInput(GameKey key) {
+    String error;
+    if (!games.input(key) && !exitGame(error)) notice = error;
+    if (games.paused()) saveGames();
+}
+void App::saveGames() { gameStore.save(games); lastGameSave_ = millis(); }
 }

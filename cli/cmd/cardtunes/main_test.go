@@ -52,6 +52,36 @@ func TestPlaylistCommands(t *testing.T) {
 	}
 }
 
+func TestGameControlCommands(t *testing.T) {
+	for _, tc := range []struct{ action, value string }{{"game", "blocks"}, {"game", "breakout"}, {"game", "2048"}, {"game-key", "primary"}, {"game-key", "pause"}, {"game-exit", ""}} {
+		t.Run(tc.action+" "+tc.value, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != "POST" || r.URL.Path != "/api/control" || r.Header.Get("Authorization") != "Bearer test-key" {
+					t.Error("wrong game request")
+				}
+				if err := r.ParseForm(); err != nil {
+					t.Fatal(err)
+				}
+				if r.Form.Get("action") != tc.action || r.Form.Get("value") != tc.value {
+					t.Error("wrong game command")
+				}
+				w.WriteHeader(202)
+				_, _ = w.Write([]byte(`{"ok":true}`))
+			}))
+			defer server.Close()
+			t.Setenv("CARDTUNES_HOST", server.URL)
+			t.Setenv("CARDTUNES_TOKEN", "test-key")
+			args := []string{tc.action}
+			if tc.value != "" {
+				args = append(args, tc.value)
+			}
+			if err := run(args); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func TestPlaylistPaginationAndMissingFiles(t *testing.T) {
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

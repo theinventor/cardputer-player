@@ -4,6 +4,16 @@ namespace ct {
 namespace {
 constexpr uint32_t Background = 0x101513, Surface = 0x232a26, Muted = 0xa3aea5, Accent = 0xd2f36b, Pink = 0xf098ab;
 String timeText(uint32_t ms) { char text[20]; snprintf(text, sizeof(text), "%lu:%02lu", ms / 60000, (ms / 1000) % 60); return text; }
+class CanvasPainter : public GamePainter {
+public:
+    explicit CanvasPainter(M5Canvas& canvas) : canvas_(canvas) {}
+    void rect(int x, int y, int w, int h, uint32_t color) override { canvas_.fillRect(x, y, w, h, color); }
+    void text(const std::string& value, int x, int y, uint32_t color, int scale) override {
+        canvas_.setTextColor(color); canvas_.setTextSize(scale); canvas_.drawString(value.c_str(), x, y);
+    }
+private:
+    M5Canvas& canvas_;
+};
 }
 bool Display::begin() {
     M5.Display.setRotation(1);
@@ -126,7 +136,22 @@ void Display::settings() {
         text(rows[i], 8, y + 1, 224, i == setting_ ? Background : 0xf2f4f1);
     }
 }
+void Display::gameMenu() {
+    for (int i = 0; i < 3; ++i) {
+        int y = 42 + i * 23;
+        if (i == gameSelected_) canvas_.fillRect(4, y, 232, 22, Accent);
+        text(gameName(GameId(i + 1)), 8, y + 4, 153, i == gameSelected_ ? Background : 0xf2f4f1);
+        text(app_.games.hasSave(GameId(i + 1)) ? "Resume" : "Play", 174, y + 4, 58, i == gameSelected_ ? Background : Muted);
+    }
+    text(gameError_.isEmpty() ? String(app_.gameStore.error().c_str()) : gameError_, 8, 116, 224, Pink);
+}
 void Display::render() {
+    if (app_.games.active() != GameId::None) {
+        canvas_.setFont(&fonts::Font0); canvas_.setTextSize(1);
+        CanvasPainter painter(canvas_); drawGame(app_.games, painter);
+        canvas_.setTextSize(1); canvas_.setFont(&fonts::lgfxJapanGothic_12);
+        canvas_.pushSprite(0, 0); lastDraw_ = millis(); gameRevision_ = app_.games.revision(); return;
+    }
     auto state = app_.audio.state();
     canvas_.fillSprite(Background);
     canvas_.fillRect(0, 0, 240, 18, Surface);
@@ -134,20 +159,24 @@ void Display::render() {
     text("V" + String(app_.settings.volume), 112, 2, 37, Muted);
     text(WiFi.isConnected() ? "WiFi" : "", 158, 2, 29, Muted);
     text(String(M5.Power.getBatteryLevel()) + "%", 198, 2, 40, Muted);
-    const char* tabs[] = {"Playing", "Library", "Playlists", "Settings"};
+    const char* tabs[] = {"Playing", "Library", "Playlists", "Games", "Settings"};
+    int start = std::max(0, view_ - 3);
     for (int i = 0; i < 4; ++i) {
-        text(tabs[i], 4 + i * 60, 22, 56, i == view_ ? Accent : Muted);
-        if (i == view_) canvas_.fillRect(4 + i * 60, 35, 54, 1, Accent);
+        text(tabs[start + i], 4 + i * 60, 22, 56, start + i == view_ ? Accent : Muted);
+        if (start + i == view_) canvas_.fillRect(4 + i * 60, 35, 54, 1, Accent);
     }
     if (view_ == 0) nowPlaying(state);
     else if (view_ == 1) library();
     else if (view_ == 2) playlists();
+    else if (view_ == 3) gameMenu();
     else settings();
     canvas_.pushSprite(0, 0); lastDraw_ = millis();
 }
 void Display::command(const String& action, const String& value) {
     String error;
-    if (!app_.control(action, value, error)) app_.notice = error.isEmpty() ? "Command unavailable" : error;
+    bool ok = app_.control(action, value, error);
+    if (!ok) app_.notice = error.isEmpty() ? "Command unavailable" : error;
+    if (action == "game") gameError_ = ok ? "" : app_.notice;
 }
 void Display::activateSetting(int delta) {
     switch (setting_) {
@@ -169,9 +198,14 @@ void Display::activateSetting(int delta) {
 }
 void Display::key(const String& key) {
     lastInput_ = millis();
-    if (key == "lock") { locked_ = !locked_; sleeping_ = locked_; M5.Display.setBrightness(locked_ ? 0 : app_.settings.brightness); return; }
+    if (key == "lock") { locked_ = !locked_; sleeping_ = locked_; if (locked_ && app_.games.active() != GameId::None) { app_.games.pause(); app_.saveGames(); } M5.Display.setBrightness(locked_ ? 0 : app_.settings.brightness); return; }
     if (locked_) return;
     if (sleeping_) { sleeping_ = false; M5.Display.setBrightness(app_.settings.brightness); }
+    if (app_.games.active() != GameId::None) {
+        app_.gameInput(gameKey(key.c_str()));
+        if (app_.games.active() == GameId::None) view_ = 0;
+        render(); return;
+    }
     if (editing_) {
         if (key == "escape") { editing_ = 0; input_ = ""; }
         else if (key == "enter") {
@@ -185,10 +219,14 @@ void Display::key(const String& key) {
         else if (key == "backspace") { if (query_.length()) query_.remove(query_.length() - 1); }
         else if (key.length() == 1 && query_.length() < 64) query_ += key;
         selected_ = app_.library.find(query_.c_str(), 0);
-    } else if (key == "tab") { view_ = (view_ + 1) % 4; playlistError_ = ""; }
+    } else if (key == "tab") { view_ = (view_ + 1) % 5; playlistError_ = ""; }
     else if (key == "escape" || key == "`") { view_ = 0; query_ = ""; }
     else if (key == "[" || key == "]") command("volume", String(std::max(0, std::min(100, int(app_.settings.volume) + (key == "[" ? -5 : 5)))));
     else if (view_ == 3) {
+        if (key == "up" || key == ";" || key == "w") gameSelected_ = std::max(0, gameSelected_ - 1);
+        else if (key == "down" || key == "." || key == "s") gameSelected_ = std::min(2, gameSelected_ + 1);
+        else if (key == "enter" || key == " ") command("game", gameSlug(GameId(gameSelected_ + 1)));
+    } else if (view_ == 4) {
         if (key == "up" || key == ";") setting_ = std::max(0, setting_ - 1);
         else if (key == "down" || key == ".") setting_ = std::min(9, setting_ + 1);
         else if (key == "enter" || key == "left" || key == "right") activateSetting(key == "left" ? -1 : 1);
@@ -222,6 +260,14 @@ void Display::key(const String& key) {
     render();
 }
 void Display::tick() {
+    auto active = app_.games.active();
+    if (active != lastGame_) {
+        clicks_ = 0;
+        if (active == GameId::None) view_ = 0;
+        else { lastInput_ = millis(); editing_ = 0; searching_ = pairing_ = false; }
+        lastGame_ = active;
+    }
+    if (active != GameId::None && (locked_ || sleeping_) && !app_.games.paused()) { app_.games.pause(); app_.saveGames(); }
     auto& keyboard = M5Cardputer.Keyboard;
     uint64_t held = 0;
     for (auto point : keyboard.keyList()) {
@@ -230,6 +276,13 @@ void Display::tick() {
     // The library's isChange() compares key counts, not press/release edges.
     // Dispatch each new physical key once, even when other keys remain held.
     uint64_t pressed = keys_.press(held);
+    bool gameLeft = false, gameRight = false;
+    for (auto point : keyboard.keyList()) {
+        char c = keyboard.getKey(point);
+        gameLeft |= c == 'a' || c == ','; gameRight |= c == 'd' || c == '/';
+    }
+    app_.games.held(!locked_ && !sleeping_ && gameLeft, !locked_ && !sleeping_ && gameRight);
+    if (active != GameId::None && held && !locked_) lastInput_ = millis();
     for (auto point : keyboard.keyList()) {
         if (point.x < 0 || point.x >= 14 || point.y < 0 || point.y >= 4 || !(pressed & (uint64_t(1) << (point.y * 14 + point.x)))) continue;
         ++app_.keyboardEvents;
@@ -247,8 +300,9 @@ void Display::tick() {
     }
     if (M5.BtnA.wasHold()) { clicks_ = 0; key("lock"); }
     if (M5.BtnA.wasClicked()) { ++clicks_; lastClick_ = millis(); }
-    if (clicks_ && millis() - lastClick_ > 350) { command(clicks_ == 1 ? "toggle" : clicks_ == 2 ? "next" : "previous"); clicks_ = 0; }
-    if (!sleeping_ && millis() - lastInput_ > uint32_t(app_.settings.sleepSeconds) * 1000) { sleeping_ = true; M5.Display.setBrightness(0); }
-    if (!sleeping_ && millis() - lastDraw_ >= 100) render();
+    if (clicks_ && millis() - lastClick_ > 350) { if (app_.games.active() != GameId::None) key("pause"); else command(clicks_ == 1 ? "toggle" : clicks_ == 2 ? "next" : "previous"); clicks_ = 0; }
+    if (!sleeping_ && millis() - lastInput_ > uint32_t(app_.settings.sleepSeconds) * 1000) { sleeping_ = true; if (app_.games.active() != GameId::None) { app_.games.pause(); app_.saveGames(); } M5.Display.setBrightness(0); }
+    if (!sleeping_ && millis() - lastDraw_ >= (app_.games.active() == GameId::None ? 100 : 33) &&
+        (app_.games.active() == GameId::None || gameRevision_ != app_.games.revision())) render();
 }
 }

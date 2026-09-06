@@ -10,7 +10,7 @@ firmware updates. No cloud account or Home Assistant is involved.
 | Key | Action |
 | --- | --- |
 | Space | Play / pause |
-| Tab | Playing / Library / Playlists / Settings |
+| Tab | Playing / Library / Playlists / Games / Settings |
 | N / B | Next / previous track |
 | [ / ] | Volume down / up |
 | , / / | Seek backward / forward 10 seconds |
@@ -28,6 +28,55 @@ firmware updates. No cloud account or Home Assistant is involved.
 
 The first key after screen sleep wakes the screen **and** performs its action.
 Explicitly locked keys stay disabled until G0 is held again.
+
+## Games (0.3.0)
+
+Three games are built into the same firmware: **Falling Blocks**, **Breakout**,
+and **2048**. Tab to Games, select with `;` / `.`, then press Enter. Each game
+resumes its last session. No reboot, download, emulator, or ROM is required.
+
+| Game | Controls |
+| --- | --- |
+| Falling Blocks | A/D or comma/slash: move; W or semicolon: rotate; S or period: soft drop; Space/Enter: hard drop |
+| Breakout | Hold A/D or comma/slash: paddle; Space/Enter: launch |
+| 2048 | WASD or semicolon/comma/period/slash: slide in that direction |
+| All games | P, Tab, or G0 click: pause menu; up/down then Enter: Resume, New game, or Exit to music |
+| All games | Backtick or Fn+backtick: save and exit to Playing; hold G0: lock and pause |
+
+Fn-arrow keys work too. 2048 ends when you reach the 2048 tile or have no moves.
+Breakout starts with three lives and refills cleared brick boards. Games are
+silent: music pauses on entry and resumes on exit **only if it was playing**.
+Playlist selection, position, and queue are retained. Screen sleep pauses games;
+after waking, use the pause menu to resume. Loading tracks must finish before entry.
+
+Progress and best scores live in `/.cardtunes/games-v1.json`, with verified
+temporary writes and a recoverable `.bak` generation. Saves happen on pause,
+exit, game over, and at 30-second checkpoints. Sudden power loss can lose the
+last checkpoint; a backup recovery can lose one additional generation. This
+is not protection from SD hardware failure or arbitrary FAT corruption.
+Without a mounted SD card games work, but progress is RAM-only. Save errors
+appear in the Games menu and status API. Exit remains available after a save failure.
+After a late SD insertion and rescan, existing card sessions take precedence
+over RAM sessions of the same game; other RAM games and higher best scores remain.
+
+Wi-Fi status, screenshots, and game commands remain available. Music changes,
+playlist edits, rescans, and music/firmware uploads are rejected while a game
+is open. Exit first. Games use the existing screen buffer and do not need PSRAM.
+Real keyboard feel, audio resume, SD timing, and runtime heap still require
+on-device acceptance testing after this prepared firmware is flashed.
+
+### Game API
+
+The same authenticated `POST /api/control` endpoint accepts:
+
+- `action=game&value=blocks` (also `breakout` or `2048`)
+- `action=game-key&value=left` (also right/up/down/primary/pause/exit)
+- `action=game-exit`
+
+`GET /api/status` adds `game`: `id` (`none` when closed), `name`, `paused`,
+`over`, `score`, `best`, and `save_error`. Invalid commands return 400; uploads
+during a game return 409. Remote keys are single presses, not held controls.
+The existing `/api/input` route also accepts device keys. No credentials change.
 
 ## Saved Playlists
 
@@ -128,6 +177,10 @@ build/cardtunes playlist show 1
 build/cardtunes playlist move 1 1 0
 build/cardtunes playlist play 1
 build/cardtunes playlist play all
+build/cardtunes game breakout
+build/cardtunes game-key primary
+build/cardtunes game-key pause
+build/cardtunes game-exit
 build/cardtunes upload /path/to/Albums
 build/cardtunes screen build/display.bmp
 build/cardtunes firmware .pio/build/cardputer-adv/firmware.bin
@@ -187,6 +240,21 @@ The firmware uses cJSON already supplied by ESP-IDF, with no new runtime depende
 Playlist tests cover persistence, write failures, backup recovery, validation,
 capacity limits, queue isolation, shuffle, repeat, and preserving saved order.
 Go tests cover authenticated playlist commands, pagination, errors, and validation.
+
+Game tests use the actual firmware C/C++ cores, cover collisions, lives, line
+clears, merges, pause/exit/restart, save corruption/recovery, and fuzz 60,000
+input steps with render bounds and sanitizer checks. To run the native-engine
+browser preview and responsive pixel/input checks (no Cardputer contacted):
+
+```sh
+bash test/games.sh
+PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs node test/games_web_test.mjs
+PREVIEW_HOST=YOUR_TAILSCALE_IP node test/games-preview.mjs
+```
+
+The preview uses port 8176 and is a shared, development-only simulation with
+no device access or music. It exercises the real game logic and drawing layout,
+but browser fonts are an approximation of the device's bitmap font.
 
 With Playwright installed, `node test/web_test.mjs` tests the actual web UI against
 a **mock API**, including CRUD, ordering, missing songs, write errors, pagination,

@@ -29,7 +29,7 @@ public:
     bool begin(uint8_t volume);
     bool send(AudioCommand command);
     AudioState state();
-    bool pauseAndWait();
+    bool pauseAndWait(bool* wasPlaying = nullptr);
     bool stopAndWait();
     void visualizer(bool enabled) { visualize_.store(enabled); }
 private:
@@ -47,6 +47,9 @@ private:
     Mp3Stream stream_;
     std::atomic<uint32_t> epoch_{0};
     std::atomic<bool> visualize_{true};
+    std::atomic<uint32_t> pauseDone_{0};
+    std::atomic<bool> pauseWasPlaying_{false};
+    uint32_t pauseRequest_ = 0;
     uint32_t lastProgress_ = 0, lastSpectrum_ = 0;
     int16_t pcm_[3][MINIMP3_MAX_SAMPLES_PER_FRAME]{};
     unsigned buffer_ = 0;

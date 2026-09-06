@@ -370,6 +370,9 @@ playlist delete ID          Delete the list, keeping music files
 playlist play ID|all        Play only this playlist, or all music
 play-library ID             Play a library track and leave playlist mode
 clear-queue | rescan        Clear upcoming tracks or rescan microSD
+game blocks|breakout|2048    Open a game (pauses music)
+game-key KEY               Game input: left/right/up/down/primary/pause
+game-exit                  Save game and return to music
 upload FILE_OR_FOLDER...    Upload MP3s, retaining album folders
 screen FILE.bmp             Capture the actual device display
 key KEY                     Send a device key (tab, enter, [, ], n, etc.)
@@ -578,7 +581,7 @@ func run(args []string) error {
 		command = "enqueue"
 	}
 	switch command {
-	case "play", "play-library", "pause", "toggle", "stop", "next", "previous", "seek", "volume", "shuffle", "repeat", "enqueue", "clear-queue", "rescan":
+	case "play", "play-library", "pause", "toggle", "stop", "next", "previous", "seek", "volume", "shuffle", "repeat", "enqueue", "clear-queue", "rescan", "game", "game-key", "game-exit":
 		data, err := c.control(command, value)
 		if err != nil {
 			return err

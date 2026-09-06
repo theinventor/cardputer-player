@@ -17,7 +17,11 @@ private:
     KeyEdges keys_;
     int view_ = 0, selected_ = 0, setting_ = 0, coverTrack_ = -2;
     int playlistSelected_ = 0;
+    int gameSelected_ = 0;
+    GameId lastGame_ = GameId::None;
+    uint32_t gameRevision_ = UINT32_MAX;
     String playlistError_;
+    String gameError_;
     bool sleeping_ = false, locked_ = false, searching_ = false, pairing_ = false;
     int editing_ = 0;
     String input_, query_;
@@ -27,6 +31,7 @@ private:
     void nowPlaying(const AudioState& state);
     void library();
     void playlists();
+    void gameMenu();
     void settings();
     void activateSetting(int delta = 0);
     void loadCover();

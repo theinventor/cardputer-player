@@ -1,6 +1,7 @@
 #pragma once
 #include "audio_player.h"
 #include "order.h"
+#include "games.h"
 #include <M5Cardputer.h>
 #include <Preferences.h>
 #include <WiFi.h>
@@ -18,6 +19,8 @@ public:
     Library library;
     SDPlaylistFiles playlistFiles{library};
     Playlists playlists{playlistFiles};
+    Games games;
+    GameStore gameStore{playlistFiles};
     AudioPlayer audio;
     Order order;
     Settings settings;
@@ -33,6 +36,10 @@ public:
     bool play(int id, uint32_t position = 0, bool paused = false);
     bool control(const String& action, const String& value, String& error);
     bool rescan();
+    bool startGame(GameId id, String& error);
+    bool exitGame(String& error);
+    void gameInput(GameKey key);
+    void saveGames();
     void saveSettings();
     void saveResume();
     void connectWifi();
@@ -47,6 +54,8 @@ private:
     uint32_t lastSave_ = 0, handledEnd_ = 0, lastWifiAttempt_ = 0, lastTick_ = 0;
     Playback lastPlayback_ = Playback::Stopped;
     bool wasConnected_ = false;
+    bool resumeAfterGame_ = false;
+    uint32_t lastGameSave_ = 0;
     String serialLine_;
     std::vector<uint32_t> resolvePlaylist(const Playlist& playlist);
     void restorePlaylist();

@@ -48,6 +48,7 @@ void AudioPlayer::stopOutput() {
 }
 void AudioPlayer::handle(const AudioCommand& command) {
     auto& speaker = M5Cardputer.Speaker;
+    bool wasPlaying = working_.playback == Playback::Playing;
     switch (command.action) {
     case AudioAction::Play:
         if (command.epoch != epoch_.load()) return;
@@ -94,6 +95,10 @@ void AudioPlayer::handle(const AudioCommand& command) {
         speaker.setVolume(working_.volume * 255 / 100); break;
     }
     publish();
+    if (command.action == AudioAction::Pause && command.value) {
+        pauseWasPlaying_.store(wasPlaying);
+        pauseDone_.store(command.value);
+    }
 }
 void AudioPlayer::spectrum(const int16_t* pcm, int count) {
     if (!visualize_.load() || millis() - lastSpectrum_ < 100 || count < 256 * working_.channels) return;
@@ -139,12 +144,16 @@ void AudioPlayer::task() {
         delay(1);
     }
 }
-bool AudioPlayer::pauseAndWait() {
+bool AudioPlayer::pauseAndWait(bool* wasPlaying) {
     AudioCommand command; command.action = AudioAction::Pause;
+    if (++pauseRequest_ == 0) ++pauseRequest_;
+    command.value = pauseRequest_;
     if (!send(command)) return false;
     for (unsigned i = 0; i < 2000; ++i) {
-        auto s = state();
-        if (s.playback != Playback::Loading && s.playback != Playback::Playing && uxQueueMessagesWaiting(commands_) == 0) return true;
+        if (pauseDone_.load() == command.value) {
+            if (wasPlaying) *wasPlaying = pauseWasPlaying_.load();
+            return true;
+        }
         delay(1);
     }
     return false;
