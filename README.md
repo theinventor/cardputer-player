@@ -29,12 +29,27 @@ firmware updates. No cloud account or Home Assistant is involved.
 The first key after screen sleep wakes the screen **and** performs its action.
 Explicitly locked keys stay disabled until G0 is held again.
 
+## Queue and Playback Order
+
+Cardtunes currently has a temporary Up next queue, not saved, named playlists or
+M3U playlist support. In Library, select a track with `;` / `.` and press `Q` to
+append it. `Enter` plays a selected track immediately. In the browser, use the
+`+` beside a song to append it and the Up next section to inspect or clear the queue.
+
+The queue holds up to 64 entries and plays in insertion order. It clears on
+reboot or library rescan. Once it empties, playback continues through the full
+library. Searching or keeping files in an album folder does not restrict playback
+to that folder. Shuffle affects library order, not the manually queued sequence;
+Repeat one keeps repeating the current song until changed or manually skipped.
+
 ## Music and Wi-Fi
 
 Copy your MP3 files onto a FAT32 microSD card, optionally inside album folders,
 then choose Rescan music in Settings. Folder `cover.jpg` artwork is supported.
 Alternatively, connect through the web interface and use Add files / Add folder.
 Uploads pause playback, retain folder names, and do not overwrite existing files.
+The keyboard also pauses while a file is transferring. Leave the player powered
+on until the upload completes. Incomplete uploads are not added to the library.
 If a card is inserted while the player is running, choose Rescan music to mount
 it. Firmware 0.1.1 restores the last selected track and saved position on startup,
 paused; press Space to continue. It does not force playback of the flash demo.
@@ -91,6 +106,9 @@ USB serial accepts newline-delimited JSON commands, including `{"cmd":"status"}`
 and `{"cmd":"info"}`. **Info includes the access key**: never publish its output.
 There is no continuous serial status logging, so a closed serial monitor cannot
 block the UI. Status includes keyboard press counts and maximum main-loop gap.
+Firmware 0.1.2 also reports the ESP32 `reset_reason` code to distinguish software
+updates (3), power-on resets (1), panic resets (4), task watchdog resets (6), and
+brownouts (9). Multipart writes yield to the scheduler between chunks.
 
 ## Tests and Current Limits
 
@@ -117,6 +135,9 @@ status/control, display capture, and OTA updates have been verified. Physical
 keys were confirmed responsive by the operator. With a card inserted, Wi-Fi MP3
 upload into album folders, playback from microSD, pause/seek, rescan, and saved
 position recovery after a firmware update have also passed on firmware 0.1.1.
+On 0.1.2, a ten-file MP3 collection totaling about 63 MB was verified in the SD
+library. The timed uploads of 4-8 MB files took 25-53 seconds each on the test
+network, averaging about 162 KiB/s. Transfer speed depends on signal and card.
 
 An optional personal demo lives at LittleFS `/demo.mp3` and `/demo.jpg` and appears
 as `/@demo.mp3` in the library. **Music and artwork are not included in this repo**.

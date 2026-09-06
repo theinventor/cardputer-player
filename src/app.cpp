@@ -1,5 +1,6 @@
 #include "app.h"
 #include <ESPmDNS.h>
+#include <esp_system.h>
 
 namespace ct {
 String jsonString(cJSON* json) {
@@ -141,7 +142,7 @@ cJSON* App::status() {
     auto s = audio.state();
     auto object = cJSON_CreateObject();
     cJSON_AddStringToObject(object, "name", "Cardtunes");
-    cJSON_AddStringToObject(object, "version", "0.1.1");
+    cJSON_AddStringToObject(object, "version", "0.1.2");
     cJSON_AddStringToObject(object, "state", playbackName(s.playback));
     cJSON_AddItemToObject(object, "track", trackJson(s.track));
     cJSON_AddNumberToObject(object, "position_ms", s.positionMs);
@@ -155,6 +156,7 @@ cJSON* App::status() {
     cJSON_AddNumberToObject(object, "heap_free", ESP.getFreeHeap());
     cJSON_AddNumberToObject(object, "heap_min", ESP.getMinFreeHeap());
     cJSON_AddNumberToObject(object, "uptime_ms", millis());
+    cJSON_AddNumberToObject(object, "reset_reason", esp_reset_reason());
     cJSON_AddNumberToObject(object, "battery_percent", M5.Power.getBatteryLevel());
     cJSON_AddNumberToObject(object, "battery_mv", M5.Power.getBatteryVoltage());
     cJSON_AddStringToObject(object, "ip", WiFi.localIP().toString().c_str());

@@ -101,6 +101,8 @@ void Web::uploadChunk(bool firmware) {
         else { SDLock lock(sdMutex); written = upload_.write(upload.buf, upload.currentSize); }
         if (written != upload.currentSize) { uploadError_ = "Write failed"; uploadAllowed_ = false; }
         received_ += written;
+        // A continuous multipart body must still leave time for scheduler work.
+        delay(1);
     } else if (upload.status == UPLOAD_FILE_ABORTED) {
         uploadAllowed_ = false; uploadError_ = "Upload interrupted";
         if (firmware_) Update.abort(); else { SDLock lock(sdMutex); upload_.close(); SD.remove("/Music/.upload.part"); }
