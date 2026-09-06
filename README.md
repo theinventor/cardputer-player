@@ -35,6 +35,9 @@ Copy your MP3 files onto a FAT32 microSD card, optionally inside album folders,
 then choose Rescan music in Settings. Folder `cover.jpg` artwork is supported.
 Alternatively, connect through the web interface and use Add files / Add folder.
 Uploads pause playback, retain folder names, and do not overwrite existing files.
+If a card is inserted while the player is running, choose Rescan music to mount
+it. Firmware 0.1.1 restores the last selected track and saved position on startup,
+paused; press Space to continue. It does not force playback of the flash demo.
 
 Set Network and Password in Settings, enable Wi-Fi, and choose Connect. The device
 remembers these settings across power cycles. Settings also displays its IP and
@@ -103,13 +106,19 @@ malformed metadata, validate paths and playback ordering, and check key rollover
 They run with address/undefined-behavior sanitizers. FFmpeg and Clang are required.
 `node test/device.mjs` uses the paired device for a live control and screen-sleep
 regression test; it briefly changes playback and volume, then leaves music playing.
+`node test/sd-device.mjs '/Music/Artist/Track.mp3'` verifies playback, seeking,
+pause, and rescan with an existing card track at least 65 seconds long. An optional
+second argument, `.pio/build/cardputer-adv/firmware.bin`, also installs that firmware
+over Wi-Fi and verifies the same SD track and saved position survive the reboot.
+This test leaves the selected track playing and does not erase or format the card.
 
 On the development Cardputer, USB flashing, internal-flash MP3 playback, Wi-Fi
-status/control, display capture, and two OTA updates have been verified. Physical
-keys were confirmed responsive by the operator. MicroSD upload/playback still
-needs verification with a card inserted; the no-card upload rejection is explicit.
+status/control, display capture, and OTA updates have been verified. Physical
+keys were confirmed responsive by the operator. With a card inserted, Wi-Fi MP3
+upload into album folders, playback from microSD, pause/seek, rescan, and saved
+position recovery after a firmware update have also passed on firmware 0.1.1.
 
 An optional personal demo lives at LittleFS `/demo.mp3` and `/demo.jpg` and appears
 as `/@demo.mp3` in the library. **Music and artwork are not included in this repo**.
-The current demo build starts track zero on boot. MP3 only; no Bluetooth audio,
+The flash demo remains available alongside SD music. MP3 only; no Bluetooth audio,
 streaming services, gapless playback, or signed firmware updates yet.

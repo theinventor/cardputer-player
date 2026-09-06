@@ -19,7 +19,6 @@ void setup() {
     app.begin();
     screen.begin();
     web.begin();
-    if (app.library.count()) app.play(0);
 }
 
 void loop() {

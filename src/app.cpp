@@ -110,7 +110,7 @@ void App::saveSettings() {
 }
 void App::saveResume() {
     auto state = audio.state();
-    if (state.track >= 0 && state.playback != Playback::Loading && state.playback != Playback::Error && currentTrack.path[0]) {
+    if (state.track >= 0 && state.track == order.current() && state.playback != Playback::Loading && state.playback != Playback::Error && currentTrack.path[0]) {
         preferences.putString("track", currentTrack.path);
         preferences.putUInt("position", state.playback == Playback::Ended ? 0 : state.positionMs);
     }
@@ -141,7 +141,7 @@ cJSON* App::status() {
     auto s = audio.state();
     auto object = cJSON_CreateObject();
     cJSON_AddStringToObject(object, "name", "Cardtunes");
-    cJSON_AddStringToObject(object, "version", "0.1.0");
+    cJSON_AddStringToObject(object, "version", "0.1.1");
     cJSON_AddStringToObject(object, "state", playbackName(s.playback));
     cJSON_AddItemToObject(object, "track", trackJson(s.track));
     cJSON_AddNumberToObject(object, "position_ms", s.positionMs);
