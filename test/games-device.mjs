@@ -12,7 +12,7 @@ const control=(action,value='')=>api('/api/control',{action,value:String(value)}
 const key=key=>api('/api/input',{key});
 const status=()=>api('/api/status');
 async function until(test){for(let i=0;i<60;i++){const s=await status();if(test(s))return s;await wait(250);}throw Error('Device state timeout');}
-async function shot(name){const r=await raw('/api/screen.bmp');assert(r.ok);const bmp=Buffer.from(await r.arrayBuffer());assert.equal(bmp.length,54+240*135*3);const colors=new Set();for(let i=54;i<bmp.length;i+=3)colors.add(bmp.readUIntBE(i,3));assert(colors.size>5,'Device canvas must be nonblank');await writeFile(`artifacts/games-${name}.bmp`,bmp);return bmp;}
+async function shot(name){const r=await raw('/api/screen.bmp');assert(r.ok);const bmp=Buffer.from(await r.arrayBuffer());assert.equal(bmp.length,54+240*135*3);const colors=new Map();for(let i=54;i<bmp.length;i+=3){const c=bmp.readUIntBE(i,3);colors.set(c,(colors.get(c)||0)+1);}await writeFile(`artifacts/games-${name}.bmp`,bmp);assert(colors.size>=3 && 240*135-Math.max(...colors.values())>200,'Device canvas must be nonblank');return bmp;}
 const before=await status();
 assert.equal(before.version,'0.3.0');assert.equal(before.game.id,'none');assert(before.sd_mounted);
 const queueBefore=(await api('/api/queue')).tracks;

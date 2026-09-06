@@ -62,8 +62,9 @@ over RAM sessions of the same game; other RAM games and higher best scores remai
 Wi-Fi status, screenshots, and game commands remain available. Music changes,
 playlist edits, rescans, and music/firmware uploads are rejected while a game
 is open. Exit first. Games use the existing screen buffer and do not need PSRAM.
-Real keyboard feel, audio resume, SD timing, and runtime heap still require
-on-device acceptance testing after this prepared firmware is flashed.
+On-device Wi-Fi acceptance covers rendering, game input, SD saves, and returning
+to music with the same playlist and queue. Physical keyboard feel and extended
+stress testing remain human acceptance checks; see [review notes](docs/GAMES-REVIEW.md).
 
 ### Game API
 
