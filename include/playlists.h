@@ -15,6 +15,9 @@ public:
     void clear() { offsets_.clear(); added_.clear(); }
     void push_back(const std::string& path);
     bool read(size_t position, std::string& path) const;
+    // Reuse one file handle for a batch of random position lookups.
+    std::unique_ptr<Reader> openReader() const;
+    bool read(Reader* file, size_t position, std::string& path) const;
     bool each(const std::function<bool(size_t, const std::string&)>& visit) const;
     bool contains(const std::string& path) const;
     void erase(size_t position);
@@ -25,12 +28,12 @@ private:
     std::vector<std::string> added_;
     PlaylistFiles* files_ = nullptr;
     std::string file_;
-    bool read(Reader* file, size_t position, std::string& path) const;
 };
 struct Playlist {
     uint32_t id = 0;
     std::string name;
     PlaylistPaths paths;
+    bool allowRepeats = false;
 };
 struct PlaylistSummary {
     uint32_t id;
@@ -64,6 +67,7 @@ public:
     bool load(uint32_t id, Playlist& playlist);
     bool create(const std::string& name, uint32_t& id);
     bool save(const Playlist& playlist);
+    bool importFile(const std::string& source, uint32_t& id);
     bool erase(uint32_t id);
     const std::string& error() const { return error_; }
     static bool validName(const std::string& name);

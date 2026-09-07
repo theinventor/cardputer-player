@@ -48,6 +48,7 @@ public:
     bool scanSucceeded() const { return scanSucceeded_; }
     bool append(const char* path);
     bool get(uint32_t id, Track& track);
+    bool each(const std::function<bool(uint32_t, const Track&)>& visit);
     bool available(const char* path);
     int find(const std::string& query, int start, int direction = 1);
     int byPath(const char* path);

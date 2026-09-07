@@ -146,9 +146,26 @@ int Library::find(const std::string& query, int start, int direction) {
     return -1;
 }
 int Library::byPath(const char* path) {
+    int found = -1;
+    if (!path || !*path) return found;
+    each([&](uint32_t id, const Track& track) { if (!strcmp(track.path, path)) { found = id; return false; } return true; });
+    return found;
+}
+bool Library::each(const std::function<bool(uint32_t, const Track&)>& visit) {
     Track track;
-    for (uint32_t i = 0; i < count(); ++i) if (get(i, track) && !strcmp(track.path, path)) return i;
-    return -1;
+    if (demo_) { if (!get(0, track) || !visit(0, track)) return false; }
+    if (!count_) return true;
+    File index;
+    { SDLock lock(sdMutex); index = SD.open(Index, FILE_READ); }
+    if (!index) return false;
+    for (uint32_t i = 0; i < count_; ++i) {
+        { SDLock lock(sdMutex); if (index.read(reinterpret_cast<uint8_t*>(&track), sizeof(track)) != sizeof(track)) return false; }
+        track.path[sizeof(track.path) - 1] = 0; track.title[sizeof(track.title) - 1] = 0;
+        track.artist[sizeof(track.artist) - 1] = 0; track.album[sizeof(track.album) - 1] = 0;
+        if (!validMusicPath(track.path) || !visit(i + (demo_ ? 1 : 0), track)) return false;
+        if (!(i % 32)) delay(1);
+    }
+    return true;
 }
 bool Library::available(const char* path) {
     SDLock lock(sdMutex);

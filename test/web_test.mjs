@@ -40,6 +40,18 @@ try {
   await page.waitForFunction(()=>document.querySelector('#title').textContent==='Pacific Coast'&&document.querySelector('#playbackScope').textContent.includes('Weekend & friends'));
   assert.equal(mock.requests.filter(r=>r.path==='/api/control').length,controlsBefore+1,'Switch scope and play chosen track in one request');
   assert.equal(mock.state.track.id,2);
+  assert.equal(mock.state.playlist_position,2);
+  mock.lists.get(id).ids.push(2);
+  await page.locator('#playlistPicker').selectOption('0');
+  await page.locator('#playlistPicker').selectOption(String(id));
+  await page.waitForFunction(()=>document.querySelectorAll('#tracks li').length===4);
+  await page.getByRole('button',{name:'Play Pacific Coast',exact:true}).nth(1).click();
+  await page.waitForFunction(()=>document.querySelector('#tracks li.current')?.dataset.position==='3');
+  assert.equal(mock.state.playlist_position,3); assert.equal(mock.state.track.id,2);
+  assert.equal(await page.locator('#tracks li.current').count(),1);
+  assert.equal(mock.requests.filter(r=>r.path==='/api/control').at(-1).params.action,'play-entry');
+  await page.getByRole('button',{name:'Remove Pacific Coast',exact:true}).nth(1).click();
+  await page.waitForFunction(()=>document.querySelectorAll('#tracks li').length===3);
   await page.getByRole('button',{name:'Move Pacific Coast up',exact:true}).click();
   await page.waitForFunction(()=>document.querySelectorAll('#tracks .name')[1]?.textContent==='Pacific Coast');
   assert.deepEqual(mock.lists.get(id).ids,[0,2,1]);
@@ -107,8 +119,96 @@ try {
   assert(mock.requests.filter(r=>r.path==='/api/library').length>readsBefore);
   assert(!await page.getByRole('button',{name:'Play Morning Drive',exact:true}).isDisabled());
   assert.equal(mock.state.active_playlist_id,0);
+
+  for(let id=4;id<33;id++)mock.tracks.push({...mock.tracks[0],id,title:`Page track ${id}`});
+  mock.state.tracks=mock.tracks.length;
+  const capped=await page.evaluate(()=>request('/api/library?limit=64'));
+  assert.equal(capped.tracks.length,8);assert.equal(capped.next_offset,8);
+  await page.evaluate(()=>loadLibrary());
+  for(const count of [8,16,24,32]){
+    assert.equal(await page.locator('#tracks li').count(),count);
+    await page.locator('#more').click();
+    await page.waitForFunction(count=>document.querySelectorAll('#tracks li').length>count,count);
+  }
+  assert.equal(await page.locator('#tracks li').count(),33);
+  assert(await page.locator('#more').isHidden());
+  await page.locator('#search').fill('Page track');
+  await page.waitForFunction(()=>document.querySelector('#tracks .name')?.textContent==='Page track 4');
+  await page.locator('#more').click();
+  await page.waitForFunction(()=>document.querySelectorAll('#tracks li').length===16);
+  assert.deepEqual(await page.locator('#tracks .name').allTextContents(),Array.from({length:16},(_,i)=>`Page track ${i+4}`));
+  mock.tracks.splice(4);mock.state.tracks=4;
+  await page.evaluate(()=>{document.querySelector('#search').value='';return loadLibrary();});
+
+  const queueTitles=()=>page.locator('#queue li').evaluateAll(rows=>rows.map(row=>row.firstChild.textContent));
+  for(const total of [64,9,8,1,0]){
+    const ids=Array.from({length:total},(_,i)=>[2,0,2,1][i%4]);
+    mock.setQueue(ids);
+    const before=mock.requests.length;
+    await page.evaluate(()=>loadQueue());
+    assert.deepEqual(await queueTitles(),ids.map(id=>mock.tracks[id].title),'Queue must retain order and duplicates');
+    assert.equal(await page.locator('#queueEmpty').isHidden(),total>0);
+    assert.deepEqual(mock.requests.slice(before).filter(r=>r.path==='/api/queue').map(r=>r.query.offset),Array.from({length:Math.max(1,Math.ceil(total/8))},(_,i)=>String(i*8)));
+  }
+  mock.setQueue(Array.from({length:64},(_,i)=>i%4));
+  await page.evaluate(()=>loadQueue());
+  await page.locator('#clearQueue').click();
+  await page.waitForFunction(()=>document.querySelectorAll('#queue li').length===0);
+  assert.equal(mock.state.queue_count,0);
+
+  const queueRoute='**/api/queue*';
+  for(const pageSize of [16,64]){
+    let calls=0;
+    const expected=Array.from({length:64},(_,i)=>mock.tracks[i%3]);
+    await page.route(queueRoute,route=>{
+      const offset=Number(new URL(route.request().url()).searchParams.get('offset'));calls++;
+      const json={tracks:expected.slice(offset,offset+pageSize)};
+      if(pageSize===16){json.total=64;json.next_offset=offset+pageSize<64?offset+pageSize:-1;}
+      return route.fulfill({json});
+    });
+    await page.evaluate(()=>loadQueue());
+    assert.deepEqual(await queueTitles(),expected.map(t=>t.title));
+    assert.equal(calls,64/pageSize,pageSize===64?'Older firmware without a cursor must finish in one request':'16-track pages must aggregate');
+    await page.unroute(queueRoute);
+  }
+  const previousQueue=await queueTitles();
+  for(const [json,status,notice] of [
+    [{tracks:[],next_offset:8},200,'Invalid queue cursor'],
+    [{tracks:[],next_offset:-2},200,'Invalid queue cursor'],
+    [{tracks:[],next_offset:64},200,'Invalid queue cursor'],
+    [{tracks:[],next_offset:8.5},200,'Invalid queue cursor'],
+    [{tracks:[],next_offset:'16'},200,'Invalid queue cursor'],
+    [{},200,'Invalid queue page'],
+    [{tracks:Array(65).fill(mock.tracks[0]),next_offset:-1},200,'Invalid queue page'],
+    [{error:'Queue unavailable'},503,'Queue unavailable'],
+  ]){
+    let calls=0;
+    await page.route(queueRoute,route=>{
+      calls++;
+      return route.fulfill(calls===1?{json:{tracks:[mock.tracks[0]],next_offset:8}}:{json,status});
+    });
+    await page.evaluate(()=>loadQueue());
+    assert.equal(calls,2,'Invalid pages must not loop');
+    assert.equal(await page.locator('#notice').innerText(),notice);
+    assert.deepEqual(await queueTitles(),previousQueue,'Later-page failure must not replace the queue with partial data');
+    await page.unroute(queueRoute);
+  }
+  let pending,release;
+  const held=new Promise(resolve=>pending=resolve),gate=new Promise(resolve=>release=resolve);
+  let calls=0;
+  await page.route(queueRoute,async route=>{
+    if(++calls===1){pending();await gate;await route.fulfill({json:{tracks:[mock.tracks[0]],next_offset:8}});}
+    else await route.fulfill({json:{tracks:[],total:0,next_offset:-1}});
+  });
+  await page.evaluate(()=>{window.pendingQueue=loadQueue();});
+  await held;
+  await page.evaluate(()=>loadQueue());
+  release();await page.evaluate(()=>window.pendingQueue);
+  assert.deepEqual(await queueTitles(),[],'A stale queue request must not overwrite the latest refresh');
+  assert.equal(calls,2,'A stale refresh must not fetch additional pages');
+  await page.unroute(queueRoute);
   assert.deepEqual(errors,[]);
-  console.log('Web playlist CRUD, pagination, ordering, scope, missing files, errors, and responsive screenshots passed (mock API; no device used).');
+  console.log('Web playlist CRUD, library/queue pagination (8/16 tracks), legacy queue, duplicate order, failed/stale queue reads, scope, missing files, errors, and responsive screenshots passed (mock API; no device used).');
 } finally {
   await browser.close();
   await new Promise(resolve=>mock.server.close(resolve));

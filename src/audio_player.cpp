@@ -20,7 +20,8 @@ bool AudioPlayer::begin(uint8_t volume) {
     stream_.keepGoing = keepGoing; stream_.context = this;
     commands_ = xQueueCreate(8, sizeof(AudioCommand));
     publish();
-    return commands_ && xTaskCreatePinnedToCore(run, "mp3", 32768, this, 3, nullptr, 0) == pdPASS;
+    // Decoder/seek high-water use is about 18 KB on the Adv; keep 6 KB margin.
+    return commands_ && xTaskCreatePinnedToCore(run, "mp3", 24576, this, 3, &worker_, 0) == pdPASS;
 }
 bool AudioPlayer::send(AudioCommand command) {
     if (!commands_ || uxQueueSpacesAvailable(commands_) == 0) return false;

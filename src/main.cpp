@@ -11,6 +11,9 @@ ct::Web web(app, screen);
 
 void setup() {
     Serial.begin(115200);
+    // ESP-IDF's UART logging lock is lazy. Allocate it before Wi-Fi can exhaust
+    // transient packet memory; otherwise logging an allocation failure can abort.
+    printf("Cardtunes starting\n"); fflush(stdout);
     // An attached USB host may not consume output. Never stall input on logging.
     Serial.setTxTimeoutMs(1);
     auto config = M5.config();

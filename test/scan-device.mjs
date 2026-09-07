@@ -33,7 +33,7 @@ async function screenshot(name) {
   assert.notDeepEqual(pixel(233, 7), pixel(235, 7), 'Battery terminal missing');
   await writeFile(`build/screenshots/${name}.bmp`, bmp);
 }
-const before = await until(s => s.version === '0.3.2');
+const before = await until(s => s.version === (process.env.CARDTUNES_TEST_VERSION || '0.3.3') && s.state !== 'loading');
 assert.equal(before.game.id, 'none'); assert.equal(before.scan.active, false);
 assert(before.tracks >= Number(process.argv[2] || 800));
 const started = Date.now(); await control('rescan');
@@ -58,7 +58,11 @@ while (Date.now() < end) {
   assert(s.scan.scanned >= last); last = s.scan.scanned;
   if (!s.scan.active) { completed = s; break; }
   assert.equal(s.tracks, before.tracks, 'Do not expose a half-built index');
-  if (Date.now() - lastReport >= 15000) { console.log(JSON.stringify({scanned: last, elapsed_ms: s.scan.elapsed_ms, heap_free: s.heap_free})); lastReport = Date.now(); }
+  if (Date.now() - lastReport >= 15000) {
+    const page = await api('/api/library?limit=64&offset=200');
+    assert.equal(page.tracks.length, 8, 'Large requests must return memory-bounded pages');
+    console.log(JSON.stringify({scanned: last, elapsed_ms: s.scan.elapsed_ms, heap_free: s.heap_free, heap_min: s.heap_min})); lastReport = Date.now();
+  }
   await wait(1000);
 }
 assert(completed, 'Full scan timed out');
@@ -81,7 +85,9 @@ try {
     const matches = await api(`/api/library?q=${encodeURIComponent(before.track.title.slice(0, 60))}`);
     const saved = matches.tracks.find(t => t.path === before.track.path);
     if (saved) {
-      await control('play-library', saved.id); await until(s => s.state === 'playing');
+      if (before.active_playlist_id) await api('/api/control', {action: 'playlist', value: String(before.active_playlist_id), entry: String(before.playlist_position)}, 202);
+      else await control('play-library', saved.id);
+      await until(s => s.state === 'playing');
       await control('seek', Math.floor(before.position_ms / 1000));
       if (before.state !== 'playing') await control('pause');
     } else await control('stop');

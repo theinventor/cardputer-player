@@ -15,16 +15,60 @@ class MemoryReader : public ct::Reader {
 public:
     explicit MemoryReader(std::vector<uint8_t> bytes) : bytes_(std::move(bytes)) {}
     size_t read(void* data, size_t count) override {
+        ++reads;
         count = std::min(count, bytes_.size() - pos_);
         if (count) memcpy(data, bytes_.data() + pos_, count);
         pos_ += count; return count;
     }
-    bool seek(uint32_t pos) override { if (pos > bytes_.size()) return false; pos_ = pos; return true; }
+    bool seek(uint32_t pos) override { ++seeks; if (pos > bytes_.size()) return false; pos_ = pos; return true; }
     uint32_t size() const override { return bytes_.size(); }
+    size_t reads = 0, seeks = 0;
 private:
     std::vector<uint8_t> bytes_;
     size_t pos_ = 0;
 };
+std::vector<uint8_t> metadataChain(unsigned version, unsigned frames, unsigned titleFrame = UINT32_MAX) {
+    unsigned frameHeader = version == 2 ? 6 : 10;
+    uint32_t length = frames * (frameHeader + 2), footer = version == 4 ? 10 : 0;
+    std::vector<uint8_t> bytes(10 + length + footer + 128);
+    memcpy(bytes.data(), "ID3", 3); bytes[3] = version; bytes[5] = footer ? 0x10 : 0;
+    for (unsigned i = 0; i < 4; ++i) bytes[6 + i] = (length >> (7 * (3 - i))) & 127;
+    for (unsigned i = 0; i < frames; ++i) {
+        auto* frame = bytes.data() + 10 + i * (frameHeader + 2);
+        const char* id = i == titleFrame ? (version == 2 ? "TT2" : "TIT2") : (version == 2 ? "PRV" : "PRIV");
+        memcpy(frame, id, version == 2 ? 3 : 4);
+        frame[version == 2 ? 5 : 7] = 2;
+        frame[frameHeader + 1] = 'x';
+    }
+    if (footer) { memcpy(bytes.data() + 10 + length, bytes.data(), 10); memcpy(bytes.data() + 10 + length, "3DI", 3); }
+    return bytes;
+}
+void testMetadataBudget() {
+    for (unsigned version : {2u, 3u, 4u}) {
+        for (unsigned frames : {65u, 100000u}) {
+            MemoryReader reader(metadataChain(version, frames));
+            auto tags = ct::readTags(reader);
+            assert(tags.audioStart == reader.size() - 128);
+            assert(tags.title.empty() && tags.artist.empty() && tags.album.empty());
+            assert(reader.reads == 66 && reader.seeks == 66);
+        }
+        for (unsigned titleFrame : {63u, 64u}) {
+            MemoryReader reader(metadataChain(version, 65, titleFrame));
+            auto tags = ct::readTags(reader);
+            assert(tags.audioStart == reader.size() - 128);
+            assert(tags.title == (titleFrame == 63 ? "x" : ""));
+            assert(reader.reads == (titleFrame == 63 ? 67u : 66u) && reader.seeks == 66);
+        }
+        auto bytes = metadataChain(version, 100000, 64);
+        auto* fallback = bytes.data() + bytes.size() - 128;
+        memcpy(fallback, "TAG", 3); memcpy(fallback + 3, "Fallback title", 14);
+        MemoryReader reader(std::move(bytes));
+        auto tags = ct::readTags(reader);
+        assert(tags.title == "Fallback title" && tags.audioStart == reader.size() - 128);
+        assert(reader.reads == 66 && reader.seeks == 66);
+    }
+    std::cout << "ID3 metadata budget: 64-frame boundary, 100000-frame chains, audio offsets, and ID3v1 fallback passed\n";
+}
 std::vector<uint8_t> readFile(const char* path) {
     std::ifstream file(path, std::ios::binary);
     assert(file.good());
@@ -68,6 +112,7 @@ void testFile(const char* path) {
     std::cout << "Decoded and sample-checked seeks: " << path << "\n";
 }
 int main(int argc, char** argv) {
+    testMetadataBudget();
     ct::KeyEdges keys;
     assert(keys.press(0) == 0);
     assert(keys.press(1) == 1);

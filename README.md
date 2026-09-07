@@ -5,6 +5,11 @@ A pocket MP3 player for the M5Stack Cardputer-Adv (Stamp-S3A).
 An on-device MP3 library and player with Wi-Fi controls, browser uploads, and
 firmware updates. No cloud account or Home Assistant is involved.
 
+Cardtunes is a standalone application using M5Stack's M5Cardputer board-support
+library, not a replacement for or fork of that library. Original Cardtunes code
+is MIT licensed; upstream components retain the licenses in [THIRD_PARTY.md](THIRD_PARTY.md).
+Music, artwork, Wi-Fi passwords, and device access keys are not included.
+
 ## Controls
 
 | Key | Action |
@@ -28,6 +33,11 @@ firmware updates. No cloud account or Home Assistant is involved.
 
 The first key after screen sleep wakes the screen **and** performs its action.
 Explicitly locked keys stay disabled until G0 is held again.
+
+The header shows an estimated battery percentage next to Wi-Fi. The Cardputer-Adv
+does not expose charger status or current to software, so the gauge does not
+claim to detect charging. Keep the physical power switch ON when charging;
+see [M5Stack's battery documentation](https://docs.m5stack.com/en/arduino/m5cardputer/battery).
 
 ## Games (0.3.0)
 
@@ -81,7 +91,8 @@ The existing `/api/input` route also accepts device keys. No credentials change.
 
 ## Saved Playlists
 
-Firmware **0.3.1** supports **16 named playlists with 1,000 unique songs each**.
+Firmware **0.3.3** supports **16 named playlists with 1,000 entries each**,
+including repeated songs in imported playlists.
 The whole-library limit remains **10,000 songs**. Existing playlists remain readable.
 A song can belong to several playlists without duplicating its MP3 file.
 
@@ -102,11 +113,13 @@ A song can belong to several playlists without duplicating its MP3 file.
   is remembered in NVS along with the existing paused track/position resume.
   Writes use a verified temporary file and a recoverable backup. Keep external
   backups too; this cannot protect against card failure or arbitrary FAT corruption.
-  Version 2 stores a JSON header line (`version`, `name`, `count`), followed by one
+  Versions 2/3 store a JSON header line (`version`, `name`, `count`), followed by one
   JSON-encoded absolute path per line. The player keeps offsets in RAM and reads
   paths in 512-byte chunks, rather than allocating the entire playlist. Legacy
   version-1 `.json` files migrate when edited; retain a backup before downgrading
   firmware because older releases cannot read the new format.
+  Version 3 preserves repeated paths as separate positions, including resume,
+  next/previous, and shuffle. Version 2 retains its unique-song validation.
 - **Missing songs:** unavailable paths remain visible in the browser and are
   skipped during playback. An empty/all-missing list cannot start; the current
   playback selection is left unchanged. Removing the currently playing entry
@@ -127,6 +140,42 @@ Shuffle does not change manually queued order. Repeat one takes precedence over
 automatic queue advancement until changed or manually skipped.
 
 ## Music and Wi-Fi
+
+### Folder Playlists and Spotify Order
+
+Copying MP3 folders only adds songs to All music; it does not encode Spotify's
+playlist order. Import a named playlist definition for each folder after copying
+and rescanning the files. No music is retransferred. For an existing `.spotdl`
+JSON export with `list_position` and the `artists - title.mp3` filename template:
+
+```sh
+ruby tools/spotify_playlist.rb export.spotdl '/Music/My Playlist' ordered.jsonl
+build/cardtunes playlist import ordered.jsonl
+build/cardtunes shuffle off
+build/cardtunes playlist play ID
+```
+
+Use the ID returned by import. The converter uses **playlist position**, not album
+track numbers or alphabetical filenames. It preserves repeats and missing paths;
+unavailable entries remain visible and are skipped during playback. Keep the
+export and JSONL as backups. Another download naming template needs an explicit
+path mapping; this tool does not guess song matches. No Spotify credentials are
+required, and the player does not connect to Spotify.
+
+To replace a definition, select All music and use `playlist import ordered.jsonl ID`.
+An omitted ID creates a new list; duplicate names and occupied slots are protected.
+Imports are streamed to SD and verified before replacing the saved list. No import
+is permitted during a scan/game or over the active playlist. For a numbered local
+mix, generate the same format in numeric filename order. JSONL example:
+
+```jsonl
+{"version":3,"name":"My Playlist","count":3}
+"/Music/My Playlist/B.mp3"
+"/Music/My Playlist/A.mp3"
+"/Music/My Playlist/B.mp3"
+```
+
+### Copying Music
 
 Copy your MP3 files onto a FAT32 microSD card, optionally inside album folders,
 then choose Rescan music in Settings. Folder `cover.jpg` artwork is supported.
@@ -224,14 +273,25 @@ All routes require the existing `Authorization: Bearer DEVICE_ACCESS_KEY` header
 | `POST /api/playlists` | `action=remove&id=ID&value=POSITION` |
 | `POST /api/playlists` | `action=move&id=ID&value=FROM&to=TO` |
 | `POST /api/playlists` | `action=delete&id=ID` |
+| `POST /api/playlist-import?size=BYTES[&id=ID]` | Multipart `file` containing version-2/3 JSONL; max 400,000 bytes; returns playlist ID |
 | `POST /api/control` | `action=playlist&value=ID` (or `all`) starts the scope |
 
-Status includes `active_playlist_id`, `playlist_name`, and `playlist_tracks`.
+Status includes `active_playlist_id`, `playlist_name`, `playlist_tracks`, and
+zero-based `playlist_position` (-1 when unselected).
 Add `track=TRACK_ID` to the playlist control to start a particular member atomically,
 without briefly playing the first song. Out-of-scope tracks are rejected before switching.
-Playlist pages are capped at 16 entries to bound RAM use with long paths. Requests
-for the former 32-entry limit are accepted but return at most 16; follow
-`next_offset`. There is no new cloud service or credential. Status also reports
+Use `entry=POSITION` instead of `track` to select a particular repeated occurrence;
+`action=play-entry&value=POSITION` plays an entry in the already-active scope.
+Playlist page resolutions use the scanned library index, cached for up to 60
+seconds and invalidated by imports, edits, music uploads, and rescans. Card changes
+outside the API require a rescan to refresh missing-file flags. Playback still
+opens the actual file and reports failures; selection does not reopen every MP3.
+Library, playlist, and queue pages are capped at 8 entries to bound RAM use.
+Former library limits up to 64 and playlist limits up to 32 are accepted but
+return at most 8; follow `next_offset` (-1 when finished). Queue pages accept
+`GET /api/queue?offset=0` and return `tracks`, `total`, and `next_offset`.
+The browser and CLI aggregate queue pages, retaining the full 64-song queue.
+There is no new cloud service or credential. Status also reports
 `playlist_track_limit` and `library_track_limit`.
 
 `POST /api/control` with `action=rescan` returns **202 when the scan starts**, not
@@ -253,6 +313,7 @@ brownouts (9). Multipart writes yield to the scheduler between chunks.
 
 ```sh
 bash test/run.sh
+ruby test/spotify_playlist_test.rb
 cd cli
 go test ./...
 go vet ./...
@@ -307,9 +368,10 @@ Playwright installation's `index.mjs`. Screenshots stay under ignored `build/`.
 preview on port 8175; its songs/state are fixtures, reset on restart, and do not
 control any hardware or play audio. It uses no real device credentials.
 
-**0.2.0 has been built and tested locally, not flashed or validated on hardware.**
-Cardputer key layout, SD persistence across an actual reboot, and heap headroom
-under maximum-size playlists must be checked when the device is reachable again.
+Firmware 0.3.3 has been exercised on the Cardputer-Adv over Wi-Fi, including
+ordered imports, repeated entries, 1,000-entry playlists, scan cancellation,
+complete rescans, and actual SD playback. See [release review](docs/0.3.3-REVIEW.md)
+for scope, evidence, and remaining limitations.
 `node test/device.mjs` uses the paired device for a live control and screen-sleep
 regression test; it briefly changes playback and volume, then leaves music playing.
 `node test/sd-device.mjs '/Music/Artist/Track.mp3'` verifies playback, seeking,

@@ -54,18 +54,22 @@ func TestPlaylistCommands(t *testing.T) {
 	}
 }
 
-func TestGameControlCommands(t *testing.T) {
-	for _, tc := range []struct{ action, value string }{{"game", "blocks"}, {"game", "breakout"}, {"game", "2048"}, {"game-key", "primary"}, {"game-key", "pause"}, {"game-exit", ""}} {
+func TestGenericControlCommands(t *testing.T) {
+	for _, tc := range []struct{ action, value string }{{"game", "blocks"}, {"game", "breakout"}, {"game", "2048"}, {"game-key", "primary"}, {"game-key", "pause"}, {"game-exit", ""}, {"play-entry", "0"}, {"play-entry", "999"}, {"queue", "37"}} {
 		t.Run(tc.action+" "+tc.value, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Method != "POST" || r.URL.Path != "/api/control" || r.Header.Get("Authorization") != "Bearer test-key" {
-					t.Error("wrong game request")
+					t.Error("wrong control request")
 				}
 				if err := r.ParseForm(); err != nil {
 					t.Fatal(err)
 				}
-				if r.Form.Get("action") != tc.action || r.Form.Get("value") != tc.value {
-					t.Error("wrong game command")
+				action := tc.action
+				if action == "queue" {
+					action = "enqueue"
+				}
+				if r.Form.Get("action") != action || r.Form.Get("value") != tc.value {
+					t.Error("wrong control command")
 				}
 				w.WriteHeader(202)
 				_, _ = w.Write([]byte(`{"ok":true}`))
@@ -81,6 +85,175 @@ func TestGameControlCommands(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+func runOutput(t *testing.T, args ...string) ([]byte, error) {
+	t.Helper()
+	file, err := os.CreateTemp(t.TempDir(), "stdout")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	previous := os.Stdout
+	os.Stdout = file
+	defer func() { os.Stdout = previous }()
+	runErr := run(args)
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	data, err := io.ReadAll(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data, runErr
+}
+
+func TestPlayEntryHelp(t *testing.T) {
+	data, err := runOutput(t, "help")
+	if err != nil || !strings.Contains(string(data), "play-entry POSITION") || !strings.Contains(string(data), "zero-based entry in the active playlist") {
+		t.Fatalf("missing play-entry help: %s (%v)", data, err)
+	}
+}
+
+func TestQueuePagination(t *testing.T) {
+	for _, tc := range []struct{ total, pageSize int }{{0, 8}, {1, 8}, {8, 8}, {9, 8}, {64, 8}, {16, 16}, {17, 16}, {64, 16}} {
+		t.Run(strconv.Itoa(tc.total)+"/page"+strconv.Itoa(tc.pageSize), func(t *testing.T) {
+			total, pageSize := tc.total, tc.pageSize
+			calls := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				offset, err := strconv.Atoi(r.URL.Query().Get("offset"))
+				if err != nil || offset != calls*pageSize || r.URL.Path != "/api/queue" || r.Method != "GET" || r.Header.Get("Authorization") != "Bearer test-key" {
+					t.Errorf("incorrect queue request: %s %s", r.Method, r.URL)
+				}
+				calls++
+				tracks := []map[string]any{}
+				end := min(offset+pageSize, total)
+				for i := offset; i < end; i++ {
+					tracks = append(tracks, map[string]any{"id": i % 3, "title": "Track " + strconv.Itoa(i%3)})
+				}
+				next := -1
+				if end < total {
+					next = end
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"tracks": tracks, "total": total, "next_offset": next})
+			}))
+			defer server.Close()
+			t.Setenv("CARDTUNES_HOST", server.URL)
+			t.Setenv("CARDTUNES_TOKEN", "test-key")
+			data, err := runOutput(t, "queue")
+			server.Close()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var result struct {
+				Tracks []struct {
+					ID    int
+					Title string
+				}
+				Total int
+				Next  int `json:"next_offset"`
+			}
+			if err := json.Unmarshal(data, &result); err != nil {
+				t.Fatal(err)
+			}
+			if result.Tracks == nil || len(result.Tracks) != total || result.Total != total || result.Next != -1 || calls != max(1, (total+pageSize-1)/pageSize) {
+				t.Fatalf("incomplete queue (%d requests): %s", calls, data)
+			}
+			for i, track := range result.Tracks {
+				if track.ID != i%3 || track.Title != "Track "+strconv.Itoa(i%3) {
+					t.Fatalf("lost queue order or duplicate at %d: %+v", i, track)
+				}
+			}
+		})
+	}
+}
+
+func TestLegacyQueue(t *testing.T) {
+	for _, cursor := range []string{"", `,"next_offset":null`} {
+		calls := 0
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls++
+			_, _ = w.Write([]byte(`{"tracks":[` + strings.Repeat(`{"id":2},`, 63) + `{"id":2}]` + cursor + `}`))
+		}))
+		data, err := newClient(Config{URL: server.URL}).queue()
+		server.Close()
+		if err != nil || calls != 1 || bytes.Count(data, []byte(`"id":2`)) != 64 {
+			t.Fatalf("legacy queue: %s, calls=%d, error=%v", data, calls, err)
+		}
+	}
+}
+
+func TestQueueRejectsInvalidPages(t *testing.T) {
+	for _, tc := range []struct {
+		name, response string
+		status         int
+	}{
+		{"non-advancing", `{"tracks":[],"next_offset":16}`, 200},
+		{"negative", `{"tracks":[],"next_offset":-2}`, 200},
+		{"out of range", `{"tracks":[],"next_offset":64}`, 200},
+		{"fractional", `{"tracks":[],"next_offset":16.5}`, 200},
+		{"string", `{"tracks":[],"next_offset":"32"}`, 200},
+		{"missing tracks", `{}`, 200},
+		{"too many tracks", `{"tracks":[` + strings.Repeat(`{"id":0},`, 64) + `{"id":0}],"next_offset":-1}`, 200},
+		{"malformed JSON", `{`, 200},
+		{"request failure", `{"error":"Queue unavailable"}`, 503},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				if calls == 1 {
+					_, _ = w.Write([]byte(`{"tracks":[{"id":3}],"next_offset":16}`))
+					return
+				}
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.response))
+			}))
+			defer server.Close()
+			t.Setenv("CARDTUNES_HOST", server.URL)
+			t.Setenv("CARDTUNES_TOKEN", "test-key")
+			data, err := runOutput(t, "queue")
+			server.Close()
+			if err == nil || len(data) != 0 || calls != 2 {
+				t.Fatalf("invalid queue emitted partial output or retried: %s, calls=%d, error=%v", data, calls, err)
+			}
+		})
+	}
+}
+
+func TestLibrarySixteenTrackPages(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		offset, err := strconv.Atoi(r.URL.Query().Get("offset"))
+		if err != nil || offset != calls*48 || r.URL.Path != "/api/library" || r.URL.Query().Get("q") != "Mix & Match" {
+			t.Errorf("incorrect library cursor or search: %s", r.URL)
+		}
+		calls++
+		tracks := []map[string]int{}
+		end := min(offset+48, 99)
+		for id := offset; id < end; id += 3 {
+			tracks = append(tracks, map[string]int{"id": id})
+		}
+		next := -1
+		if end < 99 {
+			next = end
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"tracks": tracks, "total": 99, "next_offset": next})
+	}))
+	defer server.Close()
+	t.Setenv("CARDTUNES_HOST", server.URL)
+	t.Setenv("CARDTUNES_TOKEN", "test-key")
+	data, err := runOutput(t, "list", "Mix", "&", "Match")
+	server.Close()
+	var tracks []struct{ ID int }
+	if err != nil || json.Unmarshal(data, &tracks) != nil || len(tracks) != 33 || calls != 3 {
+		t.Fatalf("incomplete library: %s, calls=%d, error=%v", data, calls, err)
+	}
+	for i, track := range tracks {
+		if track.ID != i*3 {
+			t.Fatalf("wrong library entry at %d: %+v", i, track)
+		}
 	}
 }
 
@@ -247,6 +420,61 @@ func TestMultipartUploadHasExactLength(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+func TestPlaylistImport(t *testing.T) {
+	content := []byte("{\"version\":3,\"name\":\"Ordered\",\"count\":2}\n\"/Music/B.mp3\"\n\"/Music/B.mp3\"\n")
+	path := filepath.Join(t.TempDir(), "ordered.jsonl")
+	if err := os.WriteFile(path, content, 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"", "4"} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != "POST" || r.URL.Path != "/api/playlist-import" || r.Header.Get("Authorization") != "Bearer test-key" || r.URL.Query().Get("id") != id || r.URL.Query().Get("size") != strconv.Itoa(len(content)) {
+				t.Error("invalid playlist import request")
+			}
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if int64(len(body)) != r.ContentLength || len(r.TransferEncoding) != 0 {
+				t.Error("wrong import framing")
+			}
+			r.Body = io.NopCloser(bytes.NewReader(body))
+			file, _, err := r.FormFile("file")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer file.Close()
+			got, err := io.ReadAll(file)
+			if err != nil || !bytes.Equal(got, content) {
+				t.Error("import changed playlist order")
+			}
+			w.WriteHeader(201)
+			_, _ = w.Write([]byte(`{"ok":true,"id":4}`))
+		}))
+		args := []string{"import", path}
+		if id != "" {
+			args = append(args, id)
+		}
+		_, err := newClient(Config{URL: server.URL, Token: "test-key"}).playlist(args)
+		server.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	client := newClient(Config{URL: "http://unreachable.invalid"})
+	for _, args := range [][]string{{"import"}, {"import", path, "0"}, {"import", path, "17"}, {"import", path, "4", "extra"}} {
+		if _, err := client.playlist(args); err == nil {
+			t.Fatalf("accepted %v", args)
+		}
+	}
+	if err := os.WriteFile(path, bytes.Repeat([]byte("x"), 400001), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.playlist([]string{"import", path}); err == nil || !strings.Contains(err.Error(), "device limit") {
+		t.Fatal("oversized import was not rejected locally")
 	}
 }
 

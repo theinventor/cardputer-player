@@ -68,6 +68,13 @@ int main() {
     ct::Track track;
     for (unsigned i = 0; i < library.count(); ++i) { assert(library.get(i, track)); assert(paths.insert(track.path).second); }
     assert(paths.count("/Music/original.mp3") && paths.count("/Music/folder-3/song-999.mp3"));
+    std::set<std::string> streamed;
+    uint32_t expectedId = 0;
+    assert(library.each([&](uint32_t id, const ct::Track& value) { assert(id == expectedId++); streamed.insert(value.path); return true; }));
+    assert(streamed == paths);
+    assert(library.byPath("/Music/original.mp3") >= 0); assert(library.byPath("/Music/absent.mp3") == -1);
+    unsigned visits = 0;
+    assert(!library.each([&](uint32_t, const ct::Track&) { return ++visits < 3; })); assert(visits == 3);
     ct::Library rebooted(root.c_str());
     assert(rebooted.begin() && !rebooted.scanning() && rebooted.count() == 1001);
 

@@ -25,6 +25,7 @@ type Config struct {
 }
 
 const maxPlaylistTracks = 1000
+const maxQueueTracks = 64
 
 type Client struct {
 	Config
@@ -75,11 +76,58 @@ func (c *Client) form(path string, values url.Values) ([]byte, error) {
 func (c *Client) control(action, value string) ([]byte, error) {
 	return c.form("/api/control", url.Values{"action": {action}, "value": {value}})
 }
+func (c *Client) queue() ([]byte, error) {
+	var result struct {
+		Tracks []json.RawMessage `json:"tracks"`
+		Total  int               `json:"total"`
+		Next   int               `json:"next_offset"`
+	}
+	result.Tracks = []json.RawMessage{}
+	result.Next = -1
+	for offset := 0; ; {
+		data, err := c.get("/api/queue?offset=" + strconv.Itoa(offset))
+		if err != nil {
+			return nil, err
+		}
+		var page struct {
+			Tracks []json.RawMessage `json:"tracks"`
+			Next   *int              `json:"next_offset"`
+		}
+		if err := json.Unmarshal(data, &page); err != nil {
+			return nil, err
+		}
+		if page.Tracks == nil || len(result.Tracks)+len(page.Tracks) > maxQueueTracks {
+			return nil, errors.New("device returned an invalid queue page")
+		}
+		result.Tracks = append(result.Tracks, page.Tracks...)
+		// Firmware before queue pagination returns only tracks.
+		if page.Next == nil || *page.Next == -1 {
+			break
+		}
+		if *page.Next <= offset || *page.Next >= maxQueueTracks {
+			return nil, errors.New("device returned an invalid queue cursor")
+		}
+		offset = *page.Next
+	}
+	result.Total = len(result.Tracks)
+	return json.Marshal(result)
+}
 func (c *Client) playlist(args []string) ([]byte, error) {
 	if len(args) == 0 {
 		return c.get("/api/playlists")
 	}
 	action := args[0]
+	if action == "import" && (len(args) == 2 || len(args) == 3) {
+		params := url.Values{}
+		if len(args) == 3 {
+			id, err := playlistNumber(args[2], 1, 16)
+			if err != nil {
+				return nil, err
+			}
+			params.Set("id", id)
+		}
+		return c.uploadFile(args[1], "/api/playlist-import", params, 400000)
+	}
 	if action == "show" && len(args) == 2 {
 		id, err := playlistNumber(args[1], 1, 16)
 		if err != nil {
@@ -134,7 +182,7 @@ func (c *Client) playlist(args []string) ([]byte, error) {
 	}
 	counts := map[string]int{"create": 2, "rename": 3, "delete": 2, "add": 3, "remove": 3, "move": 4}
 	if counts[action] == 0 || len(args) != counts[action] {
-		return nil, errors.New("usage: playlist [show ID | create NAME | rename ID NAME | delete ID | add ID TRACK_ID | remove ID POSITION | move ID FROM TO | play ID|all]")
+		return nil, errors.New("usage: playlist [show ID | import FILE [REPLACE_ID] | create NAME | rename ID NAME | delete ID | add ID TRACK_ID | remove ID POSITION | move ID FROM TO | play ID|all]")
 	}
 	values := url.Values{"action": {action}}
 	if action == "create" {
@@ -184,6 +232,12 @@ func playlistNumber(value string, min, max int) (string, error) {
 	return strconv.Itoa(n), nil
 }
 func (c *Client) upload(path, destination string, firmware bool) ([]byte, error) {
+	if firmware {
+		return c.uploadFile(path, "/api/firmware", url.Values{}, 3<<20)
+	}
+	return c.uploadFile(path, "/api/upload", url.Values{"path": {destination}}, 256<<20)
+}
+func (c *Client) uploadFile(path, endpoint string, params url.Values, maximum int64) ([]byte, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -195,10 +249,6 @@ func (c *Client) upload(path, destination string, firmware bool) ([]byte, error)
 	}
 	if !info.Mode().IsRegular() || info.Size() == 0 {
 		return nil, errors.New("upload requires a nonempty regular file")
-	}
-	maximum := int64(256 << 20)
-	if firmware {
-		maximum = 3 << 20
 	}
 	if info.Size() > maximum {
 		return nil, fmt.Errorf("file exceeds %d-byte device limit", maximum)
@@ -216,13 +266,7 @@ func (c *Client) upload(path, destination string, firmware bool) ([]byte, error)
 	}
 	all := framing.Bytes()
 	body := io.MultiReader(bytes.NewReader(all[:prefixLen]), file, bytes.NewReader(all[prefixLen:]))
-	endpoint := "/api/upload"
-	params := url.Values{"size": {strconv.FormatInt(info.Size(), 10)}}
-	if firmware {
-		endpoint = "/api/firmware"
-	} else {
-		params.Set("path", destination)
-	}
+	params.Set("size", strconv.FormatInt(info.Size(), 10))
 	return c.do(http.MethodPost, endpoint+"?"+params.Encode(), body, writer.FormDataContentType(), int64(len(all))+info.Size())
 }
 func configPath() (string, error) {
@@ -355,6 +399,7 @@ pair ADDRESS KEY            Verify and remember a device (private config)
 status                      Playback, battery, Wi-Fi and diagnostics as JSON
 list [SEARCH]               Search the complete paginated library
 play [ID]                   Play a track or resume
+play-entry POSITION         Play a zero-based entry in the active playlist
 pause | toggle | stop       Playback controls
 next | previous             Navigate playback order
 seek SECONDS                Absolute position in the current track
@@ -364,6 +409,7 @@ repeat off|all|one          Set repeat mode
 queue [ID]                  Read the queue or add a track
 playlist                    List saved playlists
 playlist show ID            Read a playlist (including unavailable files)
+playlist import FILE [ID]   Import ordered JSONL; optional ID replaces a list
 playlist create NAME        Create an empty named playlist
 playlist rename ID NAME     Rename a playlist
 playlist add ID TRACK_ID    Add a library track to a playlist
@@ -576,7 +622,7 @@ func run(args []string) error {
 	}
 	if command == "queue" {
 		if value == "" {
-			data, err := c.get("/api/queue")
+			data, err := c.queue()
 			if err != nil {
 				return err
 			}
@@ -585,7 +631,7 @@ func run(args []string) error {
 		command = "enqueue"
 	}
 	switch command {
-	case "play", "play-library", "pause", "toggle", "stop", "next", "previous", "seek", "volume", "shuffle", "repeat", "enqueue", "clear-queue", "rescan", "cancel-scan", "game", "game-key", "game-exit":
+	case "play", "play-entry", "play-library", "pause", "toggle", "stop", "next", "previous", "seek", "volume", "shuffle", "repeat", "enqueue", "clear-queue", "rescan", "cancel-scan", "game", "game-key", "game-exit":
 		data, err := c.control(command, value)
 		if err != nil {
 			return err

@@ -8,6 +8,32 @@ namespace ct {
 namespace {
 constexpr uint32_t Added = 0x80000000;
 constexpr size_t LineBytes = 512;
+bool boundedJsonStructure(const std::string& data, int maximumDepth, size_t maximumNodes = 0) {
+    // Each nonempty container's first child and each comma allocate a cJSON node.
+    // Count the root too; delimiters inside strings are data, not structure.
+    int depth = 0;
+    size_t nodes = 1;
+    bool quoted = false, escaped = false;
+    for (size_t i = 0; i < data.size(); ++i) {
+        char c = data[i];
+        if (quoted) {
+            if (escaped) escaped = false;
+            else if (c == '\\') escaped = true;
+            else if (c == '"') quoted = false;
+        } else if (c == '"') quoted = true;
+        else if (c == '[' || c == '{') {
+            if (++depth > maximumDepth) return false;
+            if (maximumNodes) {
+                size_t next = i + 1;
+                while (next < data.size() && uint8_t(data[next]) <= ' ') ++next;
+                if ((next == data.size() || data[next] != (c == '[' ? ']' : '}')) && ++nodes > maximumNodes) return false;
+            }
+        }
+        else if (c == ']' || c == '}') { if (--depth < 0) return false; }
+        else if (c == ',' && maximumNodes && ++nodes > maximumNodes) return false;
+    }
+    return !quoted && depth == 0;
+}
 bool line(Reader& file, uint32_t& offset, std::string& value) {
     char buffer[LineBytes];
     if (!file.seek(offset)) return false;
@@ -27,12 +53,13 @@ std::string jsonText(cJSON* json) {
 }
 std::string header(const Playlist& playlist) {
     auto json = cJSON_CreateObject();
-    if (!json || !cJSON_AddNumberToObject(json, "version", 2) ||
+    if (!json || !cJSON_AddNumberToObject(json, "version", playlist.allowRepeats ? 3 : 2) ||
         !cJSON_AddStringToObject(json, "name", playlist.name.c_str()) ||
         !cJSON_AddNumberToObject(json, "count", playlist.paths.size())) { cJSON_Delete(json); return {}; }
     return jsonText(json);
 }
 bool parsePath(const std::string& data, std::string& path) {
+    if (!boundedJsonStructure(data, 0)) return false;
     cJSON* json = cJSON_ParseWithOpts(data.c_str(), nullptr, true);
     bool ok = cJSON_IsString(json) && validMusicPath(json->valuestring);
     if (ok) path = json->valuestring;
@@ -51,9 +78,10 @@ bool PlaylistPaths::read(Reader* file, size_t position, std::string& path) const
     return file && line(*file, offset, data) && parsePath(data, path);
 }
 bool PlaylistPaths::read(size_t position, std::string& path) const {
-    auto file = files_ ? files_->openReader(file_) : nullptr;
+    auto file = openReader();
     return read(file.get(), position, path);
 }
+std::unique_ptr<Reader> PlaylistPaths::openReader() const { return files_ ? files_->openReader(file_) : nullptr; }
 bool PlaylistPaths::each(const std::function<bool(size_t, const std::string&)>& visit) const {
     auto file = files_ ? files_->openReader(file_) : nullptr;
     std::string path;
@@ -80,7 +108,7 @@ bool Playlists::validName(const std::string& name) {
 }
 // Version 1 is read-only compatibility; new saves stream bounded JSON Lines records.
 bool Playlists::decode(const std::string& data, Playlist& playlist) {
-    if (data.size() > 32768 || data.find('\0') != std::string::npos) return false;
+    if (data.size() > 32768 || data.find('\0') != std::string::npos || !boundedJsonStructure(data, 2, 140)) return false;
     cJSON* json = cJSON_ParseWithOpts(data.c_str(), nullptr, true);
     if (!json) return false;
     auto version = cJSON_GetObjectItemCaseSensitive(json, "version");
@@ -126,30 +154,33 @@ bool Playlists::readFile(const std::string& source, Playlist& playlist) {
     if (!file || file->size() > MaxBytes) return false;
     uint32_t offset = 0;
     std::string data;
-    if (!line(*file, offset, data)) return false;
+    if (!line(*file, offset, data) || !boundedJsonStructure(data, 1)) return false;
     cJSON* json = cJSON_ParseWithOpts(data.c_str(), nullptr, true);
     auto version = cJSON_GetObjectItemCaseSensitive(json, "version");
     auto name = cJSON_GetObjectItemCaseSensitive(json, "name");
     auto count = cJSON_GetObjectItemCaseSensitive(json, "count");
-    bool ok = cJSON_IsObject(json) && cJSON_IsNumber(version) && version->valuedouble == 2 &&
+    bool ok = cJSON_IsObject(json) && cJSON_IsNumber(version) && (version->valuedouble == 2 || version->valuedouble == 3) &&
         cJSON_IsString(name) && validName(name->valuestring) && cJSON_IsNumber(count) &&
         count->valuedouble >= 0 && count->valuedouble <= MaxTracks && count->valuedouble == count->valueint;
     Playlist result; result.id = playlist.id;
     uint32_t expected = ok ? count->valueint : 0;
-    if (ok) result.name = name->valuestring;
+    if (ok) { result.name = name->valuestring; result.allowRepeats = version->valuedouble == 3; }
     cJSON_Delete(json);
     if (!ok) return false;
     result.paths.files_ = &files_; result.paths.file_ = source;
     result.paths.offsets_.reserve(expected);
-    std::vector<uint64_t> hashes; hashes.reserve(expected);
+    std::vector<uint64_t> hashes; if (!result.allowRepeats) hashes.reserve(expected);
     for (uint32_t i = 0; i < expected; ++i) {
         uint32_t start = offset;
         std::string path;
         if (!line(*file, offset, data) || !parsePath(data, path)) return false;
-        uint64_t hash = pathHash(path);
-        auto at = std::lower_bound(hashes.begin(), hashes.end(), hash);
-        if (at != hashes.end() && *at == hash && result.paths.contains(path)) return false;
-        hashes.insert(at, hash); result.paths.offsets_.push_back(start);
+        if (!result.allowRepeats) {
+            uint64_t hash = pathHash(path);
+            auto at = std::lower_bound(hashes.begin(), hashes.end(), hash);
+            if (at != hashes.end() && *at == hash && result.paths.contains(path)) return false;
+            hashes.insert(at, hash);
+        }
+        result.paths.offsets_.push_back(start);
     }
     if (offset != file->size()) return false;
     playlist = std::move(result); return true;
@@ -200,7 +231,7 @@ bool Playlists::create(const std::string& name, uint32_t& id) {
 bool Playlists::save(const Playlist& playlist) {
     if (!files_.ready()) return fail("Insert a microSD card for playlists");
     if (!playlist.id || playlist.id > MaxLists) return fail("Invalid playlist ID");
-    if (!validName(playlist.name) || playlist.paths.size() > MaxTracks) return fail("Invalid playlist: maximum 1000 unique tracks");
+    if (!validName(playlist.name) || playlist.paths.size() > MaxTracks) return fail("Invalid playlist: maximum 1000 entries");
     for (const auto& item : list_) if (item.id != playlist.id && contains(item.name, playlist.name) && item.name.size() == playlist.name.size()) return fail("A playlist already has that name");
     auto file = path(playlist.id), temp = file + ".tmp", backup = file + ".bak";
     auto writer = files_.openWriter(temp);
@@ -236,6 +267,26 @@ bool Playlists::save(const Playlist& playlist) {
     if (it == list_.end()) list_.push_back(summary); else *it = summary;
     std::sort(list_.begin(), list_.end(), [](const PlaylistSummary& a, const PlaylistSummary& b) { return a.id < b.id; });
     error_.clear(); return true;
+}
+bool Playlists::importFile(const std::string& source, uint32_t& id) {
+    if (!files_.ready()) return fail("Insert a microSD card for playlists");
+    if (id > MaxLists) return fail("Invalid playlist ID");
+    Playlist imported;
+    if (!readFile(source, imported)) return fail("Invalid playlist import");
+    uint32_t target = id;
+    if (target) {
+        Playlist existing;
+        if (!load(target, existing)) return false;
+    } else {
+        for (uint32_t candidate = 1; candidate <= MaxLists; ++candidate) {
+            auto file = path(candidate), legacy = file.substr(0, file.size() - 1);
+            if (!files_.exists(file) && !files_.exists(file + ".bak") && !files_.exists(legacy) && !files_.exists(legacy + ".bak")) { target = candidate; break; }
+        }
+        if (!target) return fail("Playlist limit reached (16)");
+    }
+    imported.id = target;
+    if (!save(imported)) return false;
+    id = target; return true;
 }
 bool Playlists::erase(uint32_t id) {
     Playlist playlist;

@@ -25,3 +25,9 @@ held the UI and HTTP server for several minutes. The original panic's precise
 cause is not established. The new implementation removes the recursive,
 whole-scan call chain and demonstrates responsive, reset-free rescanning.
 Temporary crash instrumentation was removed from the release source.
+
+Follow-up: the 0.3.3 investigation reproduced a separate concrete panic path
+under simultaneous scanning and a large library API response: mDNS allocation
+failure followed by lazy UART logging-lock allocation failure. Response sizes,
+working memory, and logging initialization were corrected. See the
+[0.3.3 review](0.3.3-REVIEW.md) for evidence and remaining stress-test limits.

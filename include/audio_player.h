@@ -29,6 +29,7 @@ public:
     bool begin(uint8_t volume);
     bool send(AudioCommand command);
     AudioState state();
+    uint32_t stackFree() const { return worker_ ? uxTaskGetStackHighWaterMark(worker_) : 0; }
     bool pauseAndWait(bool* wasPlaying = nullptr);
     bool stopAndWait();
     void visualizer(bool enabled) { visualize_.store(enabled); }
@@ -43,6 +44,7 @@ private:
     std::mutex stateMutex_;
     AudioState working_, public_;
     QueueHandle_t commands_ = nullptr;
+    TaskHandle_t worker_ = nullptr;
     SDReader file_;
     Mp3Stream stream_;
     std::atomic<uint32_t> epoch_{0};

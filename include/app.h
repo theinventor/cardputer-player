@@ -33,7 +33,7 @@ public:
     String playlistName = "All music";
     bool begin();
     void tick();
-    bool play(int id, uint32_t position = 0, bool paused = false);
+    bool play(int id, uint32_t position = 0, bool paused = false, int entry = -1);
     bool control(const String& action, const String& value, String& error);
     bool rescan();
     bool startGame(GameId id, String& error);
@@ -47,8 +47,10 @@ public:
     cJSON* status();
     cJSON* trackJson(int id);
     cJSON* playlistJson(uint32_t id, uint32_t offset = 0, uint32_t limit = 32);
-    bool selectPlaylist(uint32_t id, bool start, String& error, int track = -1);
+    bool selectPlaylist(uint32_t id, bool start, String& error, int track = -1, int entry = -1);
     bool editPlaylist(const String& action, uint32_t& id, const String& value, uint32_t to, String& error);
+    void invalidatePlaylistCache() { cachedPlaylist_ = 0; cachedIds_.clear(); }
+    bool musicUploaded();
     static void jsonPrint(cJSON* json);
 private:
     uint32_t lastSave_ = 0, handledEnd_ = 0, lastWifiAttempt_ = 0, lastTick_ = 0;
@@ -57,7 +59,9 @@ private:
     bool resumeAfterGame_ = false;
     uint32_t lastGameSave_ = 0;
     String serialLine_;
-    std::vector<uint32_t> resolvePlaylist(const Playlist& playlist, bool keepMissing = false);
+    uint32_t cachedPlaylist_ = 0, cachedAt_ = 0;
+    std::vector<uint32_t> cachedIds_;
+    std::vector<uint32_t> resolvePlaylist(const Playlist& playlist, bool keepMissing = true);
     void restorePlaylist();
     void serial();
 };

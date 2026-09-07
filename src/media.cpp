@@ -110,7 +110,9 @@ Tags readTags(Reader& file) {
             if ((version == 2 || version == 3 || version == 4) && !(header[5] & 0xc0)) {
                 uint32_t pos = 10, end = 10 + length;
                 uint32_t headerSize = version == 2 ? 6 : 10;
-                while (end - pos >= headerSize) {
+                // Keep one scan step bounded even when a tag has many tiny frames.
+                constexpr unsigned MaxMetadataFrames = 64;
+                for (unsigned frames = 0; frames < MaxMetadataFrames && end - pos >= headerSize; ++frames) {
                     uint8_t frameHeader[10]{};
                     if (!file.seek(pos) || file.read(frameHeader, headerSize) != headerSize || !frameHeader[0]) break;
                     uint32_t bytes = version == 2 ? (uint32_t(frameHeader[3]) << 16) | (uint32_t(frameHeader[4]) << 8) | frameHeader[5]
