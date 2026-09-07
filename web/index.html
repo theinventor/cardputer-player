@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Cardtunes</title>
+<style>
+:root{font:15px system-ui,sans-serif;color:#eff3ec;background:#141715;--line:#343a35;--muted:#a6b0a8;--accent:#d2f36b;--pink:#f098ab}*{box-sizing:border-box;letter-spacing:0}body{margin:0}button,input,select{font:inherit}button,select{color:inherit;background:#242a25;border:1px solid var(--line);border-radius:5px;min-height:40px;padding:8px 12px}button{cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:8px}button:hover{border-color:var(--accent)}button:disabled{opacity:.4;cursor:not-allowed}button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--accent);outline-offset:3px}button.icon{width:40px;height:40px;flex:none;padding:9px}button.primary{background:var(--accent);color:#141715;border-color:var(--accent)}svg{width:20px;height:20px;flex:none}input[type=search],input[type=password]{min-width:0;background:#1d221e;border:1px solid var(--line);color:inherit;border-radius:5px;padding:10px 12px}input[type=range]{accent-color:var(--accent);width:100%;min-width:0}h1,h2,h3,p{margin:0}h1{font-size:26px;font-weight:700}h2{font-size:20px}h3{font-size:16px}small,.muted{color:var(--muted)}header{border-bottom:1px solid var(--line)}.shell{max-width:1080px;margin:auto;padding:22px 28px}.bar{display:flex;align-items:center;gap:12px;justify-content:space-between}.group{display:flex;align-items:center;gap:8px;min-width:0}.grow{flex:1}.status{font-size:13px}.status::before{content:'';display:inline-block;width:7px;height:7px;background:var(--muted);margin-right:8px;border-radius:50%}.status.online::before{background:var(--accent)}#pair{display:flex;gap:12px;align-items:end;padding:28px 0}#pair label{display:grid;gap:8px;width:320px;max-width:100%}.notice{padding:10px 0;color:var(--pink);min-height:40px;font-size:14px}.now{display:grid;grid-template-columns:136px minmax(0,1fr);gap:24px;padding:6px 0 24px}.art{width:136px;height:136px;object-fit:cover;border-radius:4px;background:#303831}#artFallback{display:grid;place-items:center}#artFallback svg{width:54px;height:54px;color:var(--accent)}#title{font-size:28px;line-height:1.15;overflow-wrap:anywhere;margin:8px 0}#artist{color:var(--muted);font-size:17px}.eyebrow{font-size:12px;color:var(--accent);text-transform:uppercase}.timeline{display:grid;grid-template-columns:42px minmax(0,1fr) 42px;gap:12px;align-items:center;font-variant-numeric:tabular-nums;margin:0 0 16px}.timeline span{font-size:13px;color:var(--muted)}.transport{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:26px}.transport .volume{display:flex;align-items:center;gap:8px;margin-left:auto;width:175px}.active{color:var(--accent);border-color:var(--accent)}canvas{width:176px;height:35px;display:block;margin-top:12px}.workspace{display:grid;grid-template-columns:minmax(0,1fr) 245px;gap:30px;border-top:1px solid var(--line);padding-top:22px}.library-head{display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap}.library-head input{width:100%;flex:1;min-width:130px}#tracks{list-style:none;padding:0;margin:0}.track{display:grid;grid-template-columns:34px minmax(0,1fr) 36px 36px;gap:8px;padding:10px 0;border-bottom:1px solid #2b312c;align-items:center}.track .number{color:var(--muted);font-size:12px;text-align:center}.track .name{font-weight:550;overflow-wrap:anywhere;line-height:1.35}.track .by{font-size:13px;color:var(--muted);margin-top:3px;overflow-wrap:anywhere}.track button{width:34px;height:34px;min-height:34px;padding:7px}.track.current .name{color:var(--accent)}.queue{border-left:1px solid var(--line);padding-left:24px}.queue ol{padding-left:20px;font-size:14px}.queue li{padding:10px 0;overflow-wrap:anywhere}.queue small{display:block;margin-top:3px}.uploads{margin-top:28px;border-top:1px solid var(--line);padding-top:18px}.uploads .bar{flex-wrap:wrap;gap:12px}progress{accent-color:var(--accent);width:100%;height:7px;margin:12px 0 5px}.empty{padding:28px 0;color:var(--muted)}footer{padding:26px 0;font-size:12px;color:var(--muted);display:flex;gap:16px;flex-wrap:wrap}#more{margin-top:15px}#queueEmpty{margin-top:15px}[hidden]{display:none!important}@media(max-width:650px){.shell{padding:18px 16px}.now{grid-template-columns:92px minmax(0,1fr);gap:16px}.art{width:92px;height:92px}#title{font-size:22px}#artist{font-size:15px}.workspace{grid-template-columns:minmax(0,1fr)}.queue{border-left:0;padding:18px 0 0;border-top:1px solid var(--line)}.status{max-width:160px}.transport .volume{width:130px}#pair{flex-wrap:wrap}canvas{width:140px;height:30px}}@media(max-width:380px){.transport{gap:6px}.transport .volume{width:100%;margin:6px 0 0}.now{grid-template-columns:74px minmax(0,1fr)}.art{width:74px;height:74px}}
+.playlist-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;border-top:1px solid var(--line);padding:18px 0}.playlist-bar label{font-size:14px}.playlist-bar select{flex:1;min-width:100px;max-width:320px;text-overflow:ellipsis}.track.playlist-track{grid-template-columns:26px minmax(0,1fr) 34px 34px 34px 34px}.track.library-track{grid-template-columns:26px minmax(0,1fr) 34px 34px 34px}.up-icon svg{transform:rotate(180deg)}.playlist-count{font-size:13px;color:var(--muted);margin:0 0 12px}.track.missing .name{color:var(--muted)}#playbackScope{margin-top:7px;font-size:13px;color:var(--muted);overflow-wrap:anywhere}dialog{background:#1d221e;color:inherit;border:1px solid var(--line);border-radius:8px;width:420px;max-width:calc(100% - 32px);padding:22px}dialog::backdrop{background:#0009}dialog form{display:grid;gap:16px}dialog label{display:grid;gap:8px}dialog input,dialog select{width:100%;min-width:0}input[type=text]{background:#141715;color:inherit;border:1px solid var(--line);border-radius:5px;padding:10px 12px}.dialog-actions{display:flex;gap:8px;justify-content:flex-end}#dialogError{color:var(--pink);overflow-wrap:anywhere}#dialogText{overflow-wrap:anywhere}@media(max-width:450px){.track.playlist-track{grid-template-columns:20px minmax(0,1fr) 30px 30px;gap:5px}.playlist-track .move-up{grid-column:3;grid-row:2}.playlist-track .move-down{grid-column:4;grid-row:2}.playlist-track .track-label{grid-row:span 2}.playlist-track .number{grid-row:span 2}.track.library-track{grid-template-columns:20px minmax(0,1fr) 30px 30px 30px;gap:5px}.track button{width:30px;height:32px;min-height:32px}.playlist-bar label{flex-basis:100%}}
+#libraryTitle{max-width:100%;overflow-wrap:anywhere}.library-head{min-width:0}
+</style>
+<header><div class="shell bar"><div class="group"><span data-icon="music-2"></span><h1>Cardtunes</h1></div><div class="group"><span id="connection" class="status">Disconnected</span><button id="logout" class="icon" title="Forget device access" aria-label="Forget device access" data-icon="log-out" hidden></button></div></div></header>
+<main class="shell">
+<form id="pair"><label>Device access key<input id="token" type="password" autocomplete="off" required maxlength="32"></label><button class="primary">Connect</button></form>
+<div id="notice" class="notice" role="status" aria-live="polite"></div>
+<div id="player" hidden>
+<section class="now"><img id="art" class="art" alt="Current track artwork" hidden><div id="artFallback" class="art" data-icon="music-2"></div><div><div id="playstate" class="eyebrow">Stopped</div><h2 id="title">No track selected</h2><p id="artist"></p><canvas id="spectrum" width="352" height="70" aria-label="Audio spectrum"></canvas></div></section>
+<div class="timeline"><span id="elapsed">0:00</span><input id="seek" type="range" min="0" max="1" value="0" aria-label="Playback position"><span id="duration">0:00</span></div>
+<div class="transport"><button class="icon" data-action="previous" title="Previous track" aria-label="Previous track" data-icon="skip-back"></button><button id="toggle" class="icon primary" data-action="toggle" title="Play or pause" aria-label="Play or pause" data-icon="play"></button><button class="icon" data-action="next" title="Next track" aria-label="Next track" data-icon="skip-forward"></button><button id="shuffle" class="icon" title="Shuffle" aria-label="Shuffle" aria-pressed="false" data-icon="shuffle"></button><select id="repeat" aria-label="Repeat mode"><option value="off">Repeat off</option><option value="all">Repeat all</option><option value="one">Repeat one</option></select><div class="volume"><span data-icon="volume-2"></span><input id="volume" type="range" min="0" max="100" value="20" aria-label="Volume"><span id="volValue" class="muted">20</span></div></div>
+<p id="playbackScope">All music</p>
+<div class="playlist-bar"><label for="playlistPicker">Playlists</label><select id="playlistPicker"><option value="0">All music</option></select><button id="playPlaylist" class="icon primary" title="Play selected list" aria-label="Play selected list" data-icon="play"></button><button id="createPlaylist" class="icon" title="New playlist" aria-label="New playlist" data-icon="plus"></button><button id="renamePlaylist" class="icon" title="Rename playlist" aria-label="Rename playlist" data-icon="pencil" disabled></button><button id="deletePlaylist" class="icon" title="Delete playlist" aria-label="Delete playlist" data-icon="x" disabled></button></div>
+<div id="scanProgress" hidden><span id="scanText" role="status"></span><button id="cancelScan" class="icon" title="Cancel scan" aria-label="Cancel scan" data-icon="x"></button></div>
+<div class="workspace"><section><div class="library-head"><h2 id="libraryTitle">Library</h2><input id="search" type="search" placeholder="Search music" maxlength="64" aria-label="Search music"><button id="rescan" class="icon" title="Rescan microSD" aria-label="Rescan microSD" data-icon="refresh-cw"></button></div><p id="playlistCount" class="playlist-count" hidden></p><ul id="tracks"></ul><p id="empty" class="empty" hidden>No matching tracks</p><button id="more" hidden>Load more</button></section><aside class="queue"><div class="bar"><h2>Up next</h2><button id="clearQueue" class="icon" title="Clear queue" aria-label="Clear queue" data-icon="x"></button></div><ol id="queue"></ol><p id="queueEmpty" class="muted">Queue is empty</p></aside></div>
+<section class="uploads"><div class="bar"><h2>Add music</h2><div class="group"><button id="addFiles"><span data-icon="upload"></span>Add files</button><button id="addFolder">Add folder</button></div></div><input id="files" type="file" accept=".mp3,audio/mpeg" multiple hidden><input id="folder" type="file" webkitdirectory multiple hidden><progress id="uploadProgress" value="0" max="100" hidden></progress><p id="uploadStatus" class="muted" role="status"></p></section>
+<footer><span id="storage"></span><span id="battery"></span><span id="network"></span><span id="version"></span></footer>
+</div>
+</main>
+<dialog id="playlistDialog" aria-labelledby="dialogTitle"><form id="playlistForm"><h2 id="dialogTitle"></h2><p id="dialogText" hidden></p><label id="nameField">Name<input id="playlistName" type="text" maxlength="63" autocomplete="off"></label><label id="destinationField" hidden>Playlist<select id="playlistDestination"></select></label><p id="dialogError" role="alert" hidden></p><div class="dialog-actions"><button id="cancelPlaylist" type="button">Cancel</button><button id="savePlaylist" class="primary" type="submit">Save</button></div></form></dialog>
+<script>
+const icons = /*ICONS*/ {};
+const $ = id => document.getElementById(id);
+document.querySelectorAll('[data-icon]').forEach(el => el.innerHTML = icons[el.dataset.icon] || '');
+let key = localStorage.getItem('cardtunes.key') || '', state = null, nextOffset = -1, tracks = [], coverID = -2, coverURL = '', refreshing = false, uploading = false, searchTimer;
+let playlists = [], viewedPlaylist = 0, playlistDetail = null, dialogAction = '', dialogTrack = null, playlistBusy = false;
+if (location.hash.length === 33) { key = location.hash.slice(1); history.replaceState(null, '', location.pathname); }
+const message = text => $('notice').textContent = text;
+const seconds = ms => `${Math.floor(ms/60000)}:${String(Math.floor(ms/1000)%60).padStart(2,'0')}`;
+async function request(path, options={}) {
+  const response = await fetch(path, {...options, headers: {...options.headers, Authorization: `Bearer ${key}`}, signal: AbortSignal.timeout(15000)});
+  if (!response.ok) { const body = await response.json().catch(()=>({})); throw new Error(body.error || `Request failed (${response.status})`); }
+  return response.json();
+}
+async function command(action, value='', extra={}) {
+  try { await request('/api/control', {method:'POST', body:new URLSearchParams({action,value:String(value),...extra})}); message(''); await refresh(); if(['enqueue','clear-queue','playlist','play-library'].includes(action)) await loadQueue(); return true; }
+  catch(error){ message(error.message); return false; }
+}
+async function refresh() {
+  if (!key || refreshing || uploading) return;
+  refreshing=true;
+  try {
+    const data=await request('/api/status'), wasScanning=!!state?.scan?.active; state=data;
+    $('player').hidden=false; $('pair').hidden=true; $('logout').hidden=false;
+    localStorage.setItem('cardtunes.key',key);
+    $('connection').textContent='Connected'; $('connection').classList.add('online');
+    $('title').textContent=data.track?.title || 'No track selected'; $('artist').textContent=data.track?.artist || '';
+    $('playstate').textContent=data.state==='loading' ? `Loading ${data.loading_percent}%` : data.state;
+    $('toggle').innerHTML=icons[data.state==='playing'?'pause':'play'];
+    $('elapsed').textContent=seconds(data.position_ms); $('duration').textContent=seconds(data.duration_ms);
+    if(document.activeElement!==$('seek')) { $('seek').max=Math.max(1,Math.floor(data.duration_ms/1000)); $('seek').value=Math.floor(data.position_ms/1000); }
+    if(document.activeElement!==$('volume')) $('volume').value=data.volume;
+    $('volValue').textContent=data.volume; $('shuffle').classList.toggle('active',data.shuffle); $('shuffle').setAttribute('aria-pressed',String(data.shuffle));
+    $('repeat').value=data.repeat;
+    $('playbackScope').textContent=`Playing from: ${data.playlist_name || 'All music'}`;
+    $('createPlaylist').disabled=!data.sd_mounted || playlists.length>=16;
+    $('storage').textContent=`${data.tracks} tracks / ${data.sd_mounted?'microSD ready':'no microSD'}`;
+    $('battery').textContent=`Battery ${data.battery_percent}%`; $('network').textContent=data.ssid; $('version').textContent=`v${data.version}`;
+    const scanning=!!data.scan?.active;
+    $('scanProgress').hidden=!scanning;
+    $('scanText').textContent=scanning?`Scanning: ${data.scan.scanned} tracks / ${Math.floor(data.scan.elapsed_ms/1000)}s`:'';
+    $('rescan').disabled=scanning;
+    $('addFiles').disabled=$('addFolder').disabled=!data.sd_mounted||scanning;
+    if(scanning)document.querySelectorAll('#tracks button,#createPlaylist,#renamePlaylist,#deletePlaylist,#playPlaylist,[data-action]').forEach(button=>button.disabled=true);
+    else document.querySelectorAll('[data-action],#playPlaylist').forEach(button=>button.disabled=false);
+    const ctx=$('spectrum').getContext('2d'); ctx.clearRect(0,0,352,70);
+    (data.bands||[]).forEach((level,i)=>{ctx.fillStyle=i<11?'#d2f36b':'#f098ab';const h=data.state==='playing'?Math.max(2,level*.65):2;ctx.fillRect(i*22,70-h,15,h);});
+    if(coverID!==data.track?.id){coverID=data.track?.id;loadCover();}
+    if(data.error) message(data.error);
+    document.querySelectorAll('.track').forEach(el=>el.classList.toggle('current',isCurrent(Number(el.dataset.id),Number(el.dataset.position))));
+    if(wasScanning&&!scanning){await loadPlaylists();await loadLibrary();await loadQueue();message(data.scan.error||data.notice||'Library updated');}
+  } catch(error) { $('connection').textContent='Disconnected';$('connection').classList.remove('online');message(error.message); }
+  finally { refreshing=false; }
+}
+async function loadCover(){
+  try { const response=await fetch('/api/cover',{headers:{Authorization:`Bearer ${key}`}}); if(!response.ok)throw Error();
+    const blob=await response.blob();if(coverURL)URL.revokeObjectURL(coverURL);coverURL=URL.createObjectURL(blob);$('art').src=coverURL;$('art').hidden=false;$('artFallback').hidden=true;
+  }catch{$('art').hidden=true;$('artFallback').hidden=false;}
+}
+function button(icon,title,click){const b=document.createElement('button');b.className='icon';b.innerHTML=icons[icon];b.title=title;b.setAttribute('aria-label',title);b.onclick=click;return b;}
+function isCurrent(id,position){return id!==null && id===state?.track?.id && (!viewedPlaylist || (viewedPlaylist===state.active_playlist_id && position===state.playlist_position));}
+function drawTracks(){
+  $('tracks').replaceChildren();
+  const query=$('search').value.toLowerCase();
+  const shown=viewedPlaylist?tracks.filter(t=>[t.title,t.artist,t.album,t.path].some(v=>v?.toLowerCase().includes(query))):tracks;
+  shown.forEach(track=>{const li=document.createElement('li');li.className=`track ${viewedPlaylist?'playlist-track':'library-track'}`;li.dataset.id=track.id;li.dataset.position=track.position;
+    li.classList.toggle('missing',!!track.missing);li.classList.toggle('current',isCurrent(track.id,track.position));
+    const n=document.createElement('span');n.className='number';n.textContent=viewedPlaylist?track.position+1:track.id+1;
+    const label=document.createElement('div'),name=document.createElement('div'),by=document.createElement('div');label.className='track-label';name.className='name';name.textContent=track.title;by.className='by';by.textContent=track.missing?'File unavailable':[track.artist,track.album].filter(Boolean).join(' / ');label.append(name,by);
+    const play=button('play',`Play ${track.title}`,async()=>{
+      if(viewedPlaylist && state?.active_playlist_id!==viewedPlaylist){await command('playlist',viewedPlaylist,{entry:String(track.position)});return;}
+      await command(viewedPlaylist?'play-entry':'play-library',viewedPlaylist?track.position:track.id);
+    });play.disabled=!!track.missing||!!state?.scan?.active;
+    li.append(n,label,play);
+    if(viewedPlaylist){
+      const remove=button('x',`Remove ${track.title}`,()=>mutatePlaylist('remove',track.position));
+      const up=button('chevron-down',`Move ${track.title} up`,()=>mutatePlaylist('move',track.position,track.position-1));up.classList.add('up-icon','move-up');up.disabled=track.position===0;
+      const down=button('chevron-down',`Move ${track.title} down`,()=>mutatePlaylist('move',track.position,track.position+1));down.classList.add('move-down');down.disabled=track.position===playlistDetail.count-1;
+      li.append(remove,up,down);
+    }else{
+      li.append(button('plus',`Queue ${track.title}`,()=>command('enqueue',track.id)),button('list-music',`Add ${track.title} to playlist`,()=>openPlaylistDialog('add',track)));
+    }
+    if(state?.scan?.active)li.querySelectorAll('button').forEach(button=>button.disabled=true);
+    $('tracks').append(li);
+  });$('empty').hidden=shown.length>0;$('empty').textContent=viewedPlaylist&&!tracks.length?'Playlist is empty':'No matching tracks';$('more').hidden=viewedPlaylist!==0||nextOffset<0;
+}
+let searchGeneration=0;
+async function loadLibrary(append=false){const generation=++searchGeneration;
+  try{
+    if(viewedPlaylist){
+      const id=viewedPlaylist;let offset=0,all=[],data;
+      do{data=await request(`/api/playlists?id=${id}&offset=${offset}`);if(generation!==searchGeneration)return;all.push(...data.tracks);if(data.next_offset>=0&&data.next_offset<=offset)throw Error('Invalid playlist page');offset=data.next_offset;}while(offset>=0);
+      playlistDetail=data;tracks=all;nextOffset=-1;
+      $('libraryTitle').textContent=data.name;$('playlistCount').textContent=`${data.count} tracks / ${data.available} available`;
+    }else{const data=await request(`/api/library?q=${encodeURIComponent($('search').value)}&offset=${append?nextOffset:0}`);if(generation!==searchGeneration)return;tracks=append?tracks.concat(data.tracks):data.tracks;nextOffset=data.next_offset;$('libraryTitle').textContent='Library';}
+    $('playlistCount').hidden=!viewedPlaylist;drawTracks();
+  }
+  catch(error){message(error.message);}
+}
+async function loadPlaylists(){
+  const data=await request('/api/playlists');playlists=data.playlists;
+  if(viewedPlaylist&&!playlists.some(p=>p.id===viewedPlaylist))viewedPlaylist=0;
+  $('playlistPicker').replaceChildren(new Option('All music','0'),...playlists.map(p=>new Option(p.name,String(p.id))));
+  $('playlistPicker').value=String(viewedPlaylist);$('renamePlaylist').disabled=$('deletePlaylist').disabled=!viewedPlaylist||!!state?.scan?.active;
+  $('createPlaylist').disabled=!state?.sd_mounted||playlists.length>=16||!!state?.scan?.active;
+}
+async function mutatePlaylist(action,value='',to=''){
+  if(playlistBusy)return;playlistBusy=true;
+  $('tracks').querySelectorAll('button').forEach(b=>b.disabled=true);
+  try{await request('/api/playlists',{method:'POST',body:new URLSearchParams({action,id:String(viewedPlaylist),value:String(value),to:String(to)})});message('');await loadPlaylists();await loadLibrary();await loadQueue();await refresh();}
+  catch(error){message(error.message);await loadLibrary();}
+  finally{playlistBusy=false;}
+}
+function openPlaylistDialog(action,track=null){
+  dialogAction=action;dialogTrack=track;
+  const current=playlists.find(p=>p.id===viewedPlaylist);
+  $('dialogTitle').textContent=({create:'New playlist',rename:'Rename playlist',delete:'Delete playlist',add:'Add to playlist'})[action];
+  $('nameField').hidden=!['create','rename'].includes(action);$('playlistName').required=!$('nameField').hidden;
+  $('playlistName').value=action==='rename'?current?.name||'':'';
+  $('destinationField').hidden=action!=='add';$('playlistDestination').replaceChildren(...playlists.map(p=>new Option(p.name,String(p.id))));
+  $('dialogText').hidden=!['delete','add'].includes(action);$('dialogText').textContent=action==='delete'?`Delete "${current?.name}"? Music files will remain on the card.`:track?.title||'';
+  $('savePlaylist').textContent=action==='delete'?'Delete':action==='add'?'Add':'Save';$('savePlaylist').disabled=action==='add'&&!playlists.length;
+  $('dialogError').hidden=!(action==='add'&&!playlists.length);$('dialogError').textContent='No saved playlists';
+  $('playlistDialog').showModal();
+  if(!$('nameField').hidden)$('playlistName').focus();
+}
+$('playlistForm').onsubmit=async event=>{
+  event.preventDefault();$('savePlaylist').disabled=true;$('cancelPlaylist').disabled=true;
+  try{
+    const action=dialogAction,id=action==='add'?$('playlistDestination').value:String(viewedPlaylist);
+    const value=action==='add'?String(dialogTrack.id):$('playlistName').value.trim();
+    if(['create','rename'].includes(action)&&(!value||new TextEncoder().encode(value).length>63))throw Error('Use a name between 1 and 63 bytes');
+    const data=await request('/api/playlists',{method:'POST',body:new URLSearchParams({action,id,value})});
+    if(action==='create')viewedPlaylist=data.id;
+    if(action==='delete')viewedPlaylist=0;
+    $('playlistDialog').close();message('');await loadPlaylists();await loadLibrary();await loadQueue();await refresh();
+  }catch(error){if($('playlistDialog').open){$('dialogError').hidden=false;$('dialogError').textContent=error.message;}else message(error.message);}
+  finally{$('savePlaylist').disabled=false;$('cancelPlaylist').disabled=false;}
+};
+$('cancelPlaylist').onclick=()=>$('playlistDialog').close();
+$('playlistDialog').addEventListener('cancel',event=>{if($('cancelPlaylist').disabled)event.preventDefault();});
+$('createPlaylist').onclick=()=>openPlaylistDialog('create');$('renamePlaylist').onclick=()=>openPlaylistDialog('rename');$('deletePlaylist').onclick=()=>openPlaylistDialog('delete');
+$('playlistPicker').onchange=()=>{viewedPlaylist=Number($('playlistPicker').value);$('search').value='';$('renamePlaylist').disabled=$('deletePlaylist').disabled=!viewedPlaylist;loadLibrary();};
+$('playPlaylist').onclick=()=>command('playlist',viewedPlaylist||'all');
+let queueGeneration=0;
+async function loadQueue(){
+  const generation=++queueGeneration,all=[];let offset=0;
+  try{
+    for(;;){
+      const data=await request(`/api/queue?offset=${offset}`);if(generation!==queueGeneration)return;
+      if(!Array.isArray(data.tracks)||all.length+data.tracks.length>64)throw Error('Invalid queue page');
+      all.push(...data.tracks);
+      if(data.next_offset==null||data.next_offset===-1)break;
+      if(!Number.isInteger(data.next_offset)||data.next_offset<=offset||data.next_offset>=64)throw Error('Invalid queue cursor');
+      offset=data.next_offset;
+    }
+    $('queue').replaceChildren();all.forEach(track=>{const li=document.createElement('li'),artist=document.createElement('small');li.textContent=track.title;artist.textContent=track.artist;li.append(artist);$('queue').append(li);});$('queueEmpty').hidden=all.length>0;
+  }catch(error){if(generation===queueGeneration)message(error.message);}
+}
+async function connect(){await refresh();if(state){try{await loadPlaylists();await loadLibrary();await loadQueue();}catch(error){message(error.message);}}}
+$('pair').onsubmit=event=>{event.preventDefault();key=$('token').value.trim();state=null;connect();};
+$('logout').onclick=()=>{localStorage.removeItem('cardtunes.key');key='';state=null;location.reload();};
+document.querySelectorAll('[data-action]').forEach(b=>b.onclick=()=>command(b.dataset.action));
+$('shuffle').onclick=()=>command('shuffle',state?.shuffle?'off':'on');$('repeat').onchange=()=>command('repeat',$('repeat').value);
+$('seek').onchange=()=>command('seek',$('seek').value);$('volume').oninput=()=>$('volValue').textContent=$('volume').value;$('volume').onchange=()=>command('volume',$('volume').value);
+$('search').oninput=()=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>viewedPlaylist?drawTracks():loadLibrary(),250);};$('more').onclick=()=>loadLibrary(true);
+$('clearQueue').onclick=()=>command('clear-queue');$('rescan').onclick=()=>command('rescan');$('cancelScan').onclick=()=>command('cancel-scan');
+$('addFiles').onclick=()=>$('files').click();$('addFolder').onclick=()=>$('folder').click();
+function uploadFile(file,index,total){return new Promise((resolve,reject)=>{
+  const path='/Music/'+(file.webkitRelativePath||file.name);const xhr=new XMLHttpRequest();xhr.open('POST',`/api/upload?size=${file.size}&path=${encodeURIComponent(path)}`);xhr.setRequestHeader('Authorization',`Bearer ${key}`);xhr.timeout=300000;
+  xhr.upload.onprogress=e=>{if(e.lengthComputable)$('uploadProgress').value=((index+e.loaded/e.total)/total)*100;};
+  xhr.onload=()=>{if(xhr.status>=200&&xhr.status<300)resolve();else{let text=`Upload failed (${xhr.status})`;try{text=JSON.parse(xhr.responseText).error||text;}catch{}reject(Error(text));}};
+  xhr.onerror=()=>reject(Error('Connection lost during upload'));xhr.ontimeout=()=>reject(Error('Upload timed out'));
+  const body=new FormData();body.append('file',file,file.name);xhr.send(body);
+});}
+async function uploadFiles(list){
+  const files=Array.from(list).filter(f=>/\.mp3$/i.test(f.name)&&!f.name.startsWith('.'));if(!files.length)return;
+  uploading=true;$('uploadProgress').hidden=false;$('addFiles').disabled=$('addFolder').disabled=true;
+  try{for(let i=0;i<files.length;i++){$('uploadStatus').textContent=`${i+1}/${files.length} ${files[i].name}`;await uploadFile(files[i],i,files.length);}$('uploadStatus').textContent=`${files.length} files added`;message('');}
+  catch(error){message(error.message);$('uploadStatus').textContent='Upload stopped';}
+  finally{uploading=false;$('files').value=$('folder').value='';await loadLibrary();await refresh();}
+}
+$('files').onchange=()=>uploadFiles($('files').files);$('folder').onchange=()=>uploadFiles($('folder').files);
+if(key)connect();setInterval(()=>{if(!document.hidden)refresh();},1500);
+</script>
+</html>
