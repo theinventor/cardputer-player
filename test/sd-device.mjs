@@ -51,6 +51,8 @@ const paused = await until(s => s.state === 'paused');
 await wait(500);
 assert.equal((await status()).position_ms, paused.position_ms);
 await control('rescan');
+const scanned = await until(s => !s.scan?.active, 900000);
+assert.notEqual(scanned.scan?.succeeded, false, scanned.scan?.error);
 track = await findTrack();
 await control('play-library', track.id);
 await until(s => s.state === 'playing' && s.track?.path === path);

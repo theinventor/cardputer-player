@@ -156,16 +156,26 @@ void Display::render() {
     canvas_.fillSprite(Background);
     canvas_.fillRect(0, 0, 240, 18, Surface);
     text("CARDTUNES", 7, 2, 82, Accent);
-    text("V" + String(app_.settings.volume), 112, 2, 37, Muted);
-    text(WiFi.isConnected() ? "WiFi" : "", 158, 2, 29, Muted);
-    text(String(M5.Power.getBatteryLevel()) + "%", 198, 2, 40, Muted);
+    text("V" + String(app_.settings.volume), 105, 2, 37, Muted);
+    text(WiFi.isConnected() ? "WiFi" : "", 147, 2, 29, Muted);
+    int battery = std::clamp<int>(M5.Power.getBatteryLevel(), 0, 100);
+    uint32_t batteryColor = battery <= 20 ? Pink : Accent;
+    text(String(battery) + "%", 179, 2, 34, battery <= 20 ? Pink : Muted);
+    canvas_.drawRect(215, 4, 18, 10, batteryColor);
+    canvas_.fillRect(233, 7, 2, 4, batteryColor);
+    if (battery) canvas_.fillRect(217, 6, (battery * 14 + 99) / 100, 6, batteryColor);
     const char* tabs[] = {"Playing", "Library", "Playlists", "Games", "Settings"};
     int start = std::max(0, view_ - 3);
     for (int i = 0; i < 4; ++i) {
         text(tabs[start + i], 4 + i * 60, 22, 56, start + i == view_ ? Accent : Muted);
         if (start + i == view_) canvas_.fillRect(4 + i * 60, 35, 54, 1, Accent);
     }
-    if (view_ == 0) nowPlaying(state);
+    if (app_.library.scanning()) {
+        text("Scanning music", 8, 46, 224, Accent);
+        text(String(app_.library.scanned()) + " tracks / " + String(app_.library.scanElapsed() / 1000) + "s", 8, 66, 224);
+        text(ct::basename(app_.library.scanPath()).c_str(), 8, 88, 224, Muted);
+        text("Cancel", 8, 112, 224, Pink);
+    } else if (view_ == 0) nowPlaying(state);
     else if (view_ == 1) library();
     else if (view_ == 2) playlists();
     else if (view_ == 3) gameMenu();
@@ -201,6 +211,11 @@ void Display::key(const String& key) {
     if (key == "lock") { locked_ = !locked_; sleeping_ = locked_; if (locked_ && app_.games.active() != GameId::None) { app_.games.pause(); app_.saveGames(); } M5.Display.setBrightness(locked_ ? 0 : app_.settings.brightness); return; }
     if (locked_) return;
     if (sleeping_) { sleeping_ = false; M5.Display.setBrightness(app_.settings.brightness); }
+    if (app_.library.scanning()) {
+        if (key == "escape" || key == "`" || key == "enter") command("cancel-scan");
+        else if (key == "[" || key == "]") command("volume", String(std::clamp<int>(int(app_.settings.volume) + (key == "[" ? -5 : 5), 0, 100)));
+        render(); return;
+    }
     if (app_.games.active() != GameId::None) {
         app_.gameInput(gameKey(key.c_str()));
         if (app_.games.active() == GameId::None) view_ = 0;
@@ -301,7 +316,7 @@ void Display::tick() {
     if (M5.BtnA.wasHold()) { clicks_ = 0; key("lock"); }
     if (M5.BtnA.wasClicked()) { ++clicks_; lastClick_ = millis(); }
     if (clicks_ && millis() - lastClick_ > 350) { if (app_.games.active() != GameId::None) key("pause"); else command(clicks_ == 1 ? "toggle" : clicks_ == 2 ? "next" : "previous"); clicks_ = 0; }
-    if (!sleeping_ && millis() - lastInput_ > uint32_t(app_.settings.sleepSeconds) * 1000) { sleeping_ = true; if (app_.games.active() != GameId::None) { app_.games.pause(); app_.saveGames(); } M5.Display.setBrightness(0); }
+    if (!sleeping_ && !app_.library.scanning() && millis() - lastInput_ > uint32_t(app_.settings.sleepSeconds) * 1000) { sleeping_ = true; if (app_.games.active() != GameId::None) { app_.games.pause(); app_.saveGames(); } M5.Display.setBrightness(0); }
     if (!sleeping_ && millis() - lastDraw_ >= (app_.games.active() == GameId::None ? 100 : 33) &&
         (app_.games.active() == GameId::None || gameRevision_ != app_.games.revision())) render();
 }

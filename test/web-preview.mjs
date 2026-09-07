@@ -65,7 +65,9 @@ export function createPreviewServer() {
       else if(action === 'enqueue'){
         if(state.active_playlist_id&&!lists.get(state.active_playlist_id)?.ids.includes(Number(value))){send(400,{error:'Queue full or track outside the active playlist'});return;}
         queue.push(Number(value));
-      }else if(action === 'clear-queue'||action === 'rescan')queue=[];
+      }else if(action === 'rescan'){state.scan={active:true,scanned:0,elapsed_ms:0,error:'',succeeded:false};queue=[];}
+      else if(action === 'cancel-scan'){state.scan.active=false;state.scan.error='Scan cancelled';}
+      else if(action === 'clear-queue')queue=[];
       else if(action === 'toggle')state.state=state.state==='playing'?'paused':'playing';
       state.queue_count=queue.length;send(202,{ok:true});return;
     }

@@ -20,4 +20,8 @@ read -r -a json_flags <<< "$(pkg-config --cflags --libs libcjson)"
   -fno-omit-frame-pointer -DMINIMP3_ONLY_MP3 -DMINIMP3_NO_SIMD -Iinclude \
   test/playlists_test.cpp src/playlists.cpp src/media.cpp "${json_flags[@]}" -o build/playlists-test
 build/playlists-test
+"${CXX:-clang++}" -std=c++17 -O1 -g -fsanitize=address,undefined \
+  -fno-omit-frame-pointer -DMINIMP3_ONLY_MP3 -DMINIMP3_NO_SIMD -Itest/storage_stubs -Iinclude \
+  test/storage_test.cpp src/storage.cpp src/media.cpp -o build/storage-test
+build/storage-test
 bash test/games.sh

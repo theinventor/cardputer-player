@@ -1,5 +1,6 @@
 #include "storage.h"
 #include <SPI.h>
+#include <cerrno>
 
 namespace ct {
 std::recursive_mutex sdMutex;
@@ -12,7 +13,7 @@ bool Library::begin() {
     SDLock lock(sdMutex);
     demo_ = LittleFS.begin(false) && LittleFS.exists("/demo.mp3");
     SPI.begin(40, 39, 14, 12);
-    mounted_ = SD.begin(12, SPI, 20000000);
+    mounted_ = SD.begin(12, SPI, 20000000, mountPoint_);
     if (!mounted_) return false;
     SD.mkdir("/.cardtunes");
     SD.mkdir("/Music");
@@ -21,6 +22,7 @@ bool Library::begin() {
     if (index && index.size() % sizeof(Track) == 0 && index.size() / sizeof(Track) <= MaxTracks) {
         count_ = index.size() / sizeof(Track); return true;
     }
+    index.close();
     return scan();
 }
 bool Library::record(const char* path, File& index) {
@@ -36,51 +38,80 @@ bool Library::record(const char* path, File& index) {
     copyText(track.artist, tags.artist);
     copyText(track.album, tags.album);
     if (index.write(reinterpret_cast<const uint8_t*>(&track), sizeof(track)) != sizeof(track)) return false;
-    ++count_; return true;
-}
-bool Library::walk(const std::string& path, unsigned depth, File& index, void (*progress)(uint32_t)) {
-    File dir = SD.open(path.c_str(), FILE_READ);
-    if (!dir || !dir.isDirectory()) return false;
-    while (File entry = dir.openNextFile()) {
-        std::string name = basename(entry.name());
-        std::string child = path == "/" ? path + name : path + "/" + name;
-        bool directory = entry.isDirectory(); entry.close();
-        if (name.empty() || name[0] == '.') continue;
-        if (directory) {
-            if (depth < 8 && child.size() < 192) { if (!walk(child, depth + 1, index, progress)) return false; }
-            else ++skipped_;
-        } else if (isMp3(child)) {
-            if (count_ >= MaxTracks || !validMusicPath(child)) ++skipped_;
-            else if (!record(child.c_str(), index)) return false;
-            if (progress) progress(count_);
-        }
-        delay(1);
-    }
     return true;
 }
-bool Library::scan(void (*progress)(uint32_t)) {
-    if (!mounted_) return false;
+bool Library::scan() {
+    if (scanning()) return false;
+    scanError_.clear(); scanPath_.clear(); scanSucceeded_ = false;
+    scanned_ = skipped_ = scanElapsed_ = 0;
+    if (!mounted_) { scanError_ = "No microSD detected"; return false; }
     SDLock lock(sdMutex);
-    uint32_t oldCount = count_;
-    count_ = skipped_ = 0;
-    File index = SD.open(Temp, FILE_WRITE);
-    if (!index) { count_ = oldCount; return false; }
-    bool ok = walk("/", 0, index, progress);
-    index.flush(); index.close();
-    if (!ok) { SD.remove(Temp); count_ = oldCount; return false; }
-    SD.remove(Backup);
-    if (SD.exists(Index) && !SD.rename(Index, Backup)) { count_ = oldCount; return false; }
-    if (!SD.rename(Temp, Index)) { SD.rename(Backup, Index); count_ = oldCount; return false; }
-    SD.remove(Backup);
+    scanStarted_ = millis();
+    scanIndex_ = SD.open(Temp, FILE_WRITE);
+    if (!scanIndex_) { scanError_ = "Cannot create music index"; return false; }
+    directories_[0] = {opendir(mountPoint_), "/"};
+    if (!directories_[0].handle) { finishScan(false, "Cannot read microSD directory"); return false; }
+    scanDepth_ = 0;
     return true;
 }
+void Library::scanStep() {
+    if (!scanning()) return;
+    SDLock lock(sdMutex);
+    auto& directory = directories_[scanDepth_];
+    errno = 0;
+    auto* entry = readdir(directory.handle);
+    if (!entry) {
+        if (errno) { finishScan(false, "Cannot read microSD directory"); return; }
+        closedir(directory.handle); directory.handle = nullptr; directory.path.clear();
+        if (!scanDepth_) finishScan(true);
+        else --scanDepth_;
+        return;
+    }
+    // Enumerate names without opening every file twice, including macOS sidecars.
+    if (!entry->d_name[0] || entry->d_name[0] == '.') return;
+    scanPath_ = directory.path == "/" ? directory.path + entry->d_name : directory.path + "/" + entry->d_name;
+    if (entry->d_type == DT_DIR) {
+        if (scanDepth_ == int(directories_.size()) - 1 || scanPath_.size() >= sizeof(Track::path)) { ++skipped_; return; }
+        auto* handle = opendir((std::string(mountPoint_) + scanPath_).c_str());
+        if (!handle) { finishScan(false, "Cannot open music folder"); return; }
+        directories_[++scanDepth_] = {handle, scanPath_};
+    } else if (entry->d_type == DT_REG && isMp3(scanPath_)) {
+        if (scanned_ >= MaxTracks || !validMusicPath(scanPath_)) { ++skipped_; return; }
+        if (!record(scanPath_.c_str(), scanIndex_)) { finishScan(false, "Cannot read song or write music index"); return; }
+        ++scanned_;
+    }
+}
+void Library::finishScan(bool success, const char* error) {
+    SDLock lock(sdMutex);
+    for (auto& directory : directories_) {
+        if (directory.handle) closedir(directory.handle);
+        directory.handle = nullptr; directory.path.clear();
+    }
+    scanDepth_ = -1; scanElapsed_ = millis() - scanStarted_;
+    scanError_ = error;
+    scanIndex_.flush();
+    if (success && scanIndex_.size() != scanned_ * sizeof(Track)) { success = false; scanError_ = "Incomplete music index"; }
+    scanIndex_.close();
+    if (success) {
+        if ((SD.exists(Backup) && !SD.remove(Backup)) || (SD.exists(Index) && !SD.rename(Index, Backup))) {
+            success = false; scanError_ = "Cannot back up music index";
+        } else if (!SD.rename(Temp, Index)) {
+            if (SD.exists(Backup)) SD.rename(Backup, Index);
+            success = false; scanError_ = "Cannot save music index";
+        }
+    }
+    if (success) { count_ = scanned_; SD.remove(Backup); }
+    else SD.remove(Temp);
+    scanSucceeded_ = success;
+}
+void Library::cancelScan() { if (scanning()) finishScan(false, "Scan cancelled"); }
 bool Library::append(const char* path) {
-    if (!mounted_ || count_ >= MaxTracks || !validMusicPath(path)) return false;
+    if (scanning() || !mounted_ || count_ >= MaxTracks || !validMusicPath(path)) return false;
     SDLock lock(sdMutex);
     File file = SD.open(Index, FILE_APPEND);
     if (!file) return false;
     bool ok = record(path, file);
-    file.flush(); file.close(); return ok;
+    file.flush(); file.close(); if (ok) ++count_; return ok;
 }
 bool Library::get(uint32_t id, Track& track) {
     if (demo_ && id == 0) {

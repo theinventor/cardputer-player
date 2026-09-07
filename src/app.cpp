@@ -59,7 +59,7 @@ bool App::begin() {
     return ready;
 }
 bool App::play(int id, uint32_t position, bool paused) {
-    if (games.active() != GameId::None) return false;
+    if (library.scanning() || games.active() != GameId::None) return false;
     Track track;
     if (!ready || id < 0 || !order.contains(id) || !library.get(id, track)) return false;
     AudioCommand cmd; cmd.action = AudioAction::Play; cmd.track = id;
@@ -70,6 +70,10 @@ bool App::play(int id, uint32_t position, bool paused) {
     return true;
 }
 bool App::control(const String& action, const String& value, String& error) {
+    if (action == "cancel-scan") {
+        library.cancelScan(); notice = library.scanError().c_str(); return true;
+    }
+    if (library.scanning() && action != "volume") { error = "Music scan in progress"; return false; }
     if (action == "game") return startGame(gameId(value.c_str()), error);
     if (action == "game-exit") return exitGame(error);
     if (action == "game-key") {
@@ -124,16 +128,14 @@ bool App::control(const String& action, const String& value, String& error) {
     return true;
 }
 bool App::rescan() {
-    if (games.active() != GameId::None) return false;
+    if (library.scanning() || games.active() != GameId::None) return false;
     if (!audio.stopAndWait()) return false;
     saveResume();
     notice = "Scanning music";
-    bool ok = library.mounted() ? library.scan() : library.begin();
-    if (library.mounted() && !gameStore.restored()) { Games card; if (gameStore.load(card)) games.mergeSaved(card); }
-    order.reset(library.count()); currentTrack = Track{};
-    playlists.begin(); restorePlaylist();
-    notice = ok ? "Library updated" : "No microSD detected";
-    return ok;
+    if ((!library.mounted() && !library.begin()) || (!library.scanning() && !library.scan())) {
+        notice = library.scanError().empty() ? "No microSD detected" : library.scanError().c_str(); return false;
+    }
+    return true;
 }
 std::vector<uint32_t> App::resolvePlaylist(const Playlist& playlist, bool keepMissing) {
     std::vector<std::pair<uint64_t, uint32_t>> wanted;
@@ -169,6 +171,7 @@ void App::restorePlaylist() {
     }
 }
 bool App::selectPlaylist(uint32_t id, bool start, String& error, int track) {
+    if (library.scanning()) { error = "Music scan in progress"; return false; }
     if (games.active() != GameId::None) { error = "Exit the game before changing music"; return false; }
     Playlist playlist;
     std::vector<uint32_t> ids;
@@ -191,6 +194,7 @@ bool App::selectPlaylist(uint32_t id, bool start, String& error, int track) {
     return true;
 }
 bool App::editPlaylist(const String& action, uint32_t& id, const String& value, uint32_t to, String& error) {
+    if (library.scanning()) { error = "Music scan in progress"; return false; }
     if (games.active() != GameId::None) { error = "Exit the game before editing playlists"; return false; }
     if (action == "create") {
         if (playlists.create(value.c_str(), id)) return true;
@@ -312,7 +316,7 @@ cJSON* App::status() {
     auto s = audio.state();
     auto object = cJSON_CreateObject();
     cJSON_AddStringToObject(object, "name", "Cardtunes");
-    cJSON_AddStringToObject(object, "version", "0.3.1");
+    cJSON_AddStringToObject(object, "version", "0.3.2");
     cJSON_AddNumberToObject(object, "playlist_track_limit", Playlists::MaxTracks);
     cJSON_AddNumberToObject(object, "library_track_limit", Library::MaxTracks);
     auto game = cJSON_AddObjectToObject(object, "game");
@@ -332,6 +336,14 @@ cJSON* App::status() {
     cJSON_AddStringToObject(object, "repeat", order.repeat() == Repeat::One ? "one" : order.repeat() == Repeat::All ? "all" : "off");
     cJSON_AddBoolToObject(object, "sd_mounted", library.mounted());
     cJSON_AddNumberToObject(object, "tracks", library.count());
+    auto scan = cJSON_AddObjectToObject(object, "scan");
+    cJSON_AddBoolToObject(scan, "active", library.scanning());
+    cJSON_AddBoolToObject(scan, "succeeded", library.scanSucceeded());
+    cJSON_AddNumberToObject(scan, "scanned", library.scanned());
+    cJSON_AddNumberToObject(scan, "skipped", library.skipped());
+    cJSON_AddNumberToObject(scan, "elapsed_ms", library.scanElapsed());
+    cJSON_AddStringToObject(scan, "path", library.scanPath().c_str());
+    cJSON_AddStringToObject(scan, "error", library.scanError().c_str());
     cJSON_AddNumberToObject(object, "queue_count", order.queue().size());
     cJSON_AddNumberToObject(object, "active_playlist_id", activePlaylist);
     cJSON_AddStringToObject(object, "playlist_name", playlistName.c_str());
@@ -384,6 +396,21 @@ void App::serial() {
 }
 void App::tick() {
     uint32_t now = millis();
+    if (library.scanning()) {
+        library.scanStep();
+        if (!library.scanning()) {
+            if (library.scanSucceeded()) {
+                if (!gameStore.restored()) { Games card; if (gameStore.load(card)) games.mergeSaved(card); }
+                order.reset(library.count()); currentTrack = Track{};
+                playlists.begin(); restorePlaylist();
+                String path = preferences.getString("track");
+                int id = library.byPath(path.c_str());
+                if (ready && id >= 0 && order.contains(id)) play(id, preferences.getUInt("position", 0), true);
+                notice = "Library updated: " + String(library.count()) + " tracks";
+                if (library.skipped()) notice += ", " + String(library.skipped()) + " skipped";
+            } else notice = library.scanError().c_str();
+        }
+    }
     bool wasPaused = games.paused();
     games.tick(lastTick_ ? now - lastTick_ : 0);
     if (games.active() != GameId::None && ((!wasPaused && games.paused()) || now - lastGameSave_ >= 30000)) saveGames();
@@ -405,6 +432,7 @@ void App::tick() {
     if (settings.wifi && !connected && millis() - lastWifiAttempt_ >= 30000) connectWifi();
 }
 bool App::startGame(GameId id, String& error) {
+    if (library.scanning()) { error = "Music scan in progress"; return false; }
     if (id == GameId::None) { error = "Expected blocks, breakout, or 2048"; return false; }
     if (games.active() != GameId::None) { error = "Exit the current game first"; return false; }
     auto before = audio.state();

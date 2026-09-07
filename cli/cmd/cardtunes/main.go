@@ -372,7 +372,8 @@ playlist move ID FROM TO    Reorder zero-based playlist positions
 playlist delete ID          Delete the list, keeping music files
 playlist play ID|all        Play only this playlist, or all music
 play-library ID             Play a library track and leave playlist mode
-clear-queue | rescan        Clear upcoming tracks or rescan microSD
+clear-queue | rescan        Clear queue or start a background microSD scan
+cancel-scan                Cancel a scan; status reports scan progress
 game blocks|breakout|2048    Open a game (pauses music)
 game-key KEY               Game input: left/right/up/down/primary/pause
 game-exit                  Save game and return to music
@@ -584,7 +585,7 @@ func run(args []string) error {
 		command = "enqueue"
 	}
 	switch command {
-	case "play", "play-library", "pause", "toggle", "stop", "next", "previous", "seek", "volume", "shuffle", "repeat", "enqueue", "clear-queue", "rescan", "game", "game-key", "game-exit":
+	case "play", "play-library", "pause", "toggle", "stop", "next", "previous", "seek", "volume", "shuffle", "repeat", "enqueue", "clear-queue", "rescan", "cancel-scan", "game", "game-key", "game-exit":
 		data, err := c.control(command, value)
 		if err != nil {
 			return err

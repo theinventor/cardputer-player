@@ -130,6 +130,15 @@ automatic queue advancement until changed or manually skipped.
 
 Copy your MP3 files onto a FAT32 microSD card, optionally inside album folders,
 then choose Rescan music in Settings. Folder `cover.jpg` artwork is supported.
+Firmware **0.3.2** scans one directory entry at a time: the keyboard, display,
+and Wi-Fi API keep running, with a scanned-track count and elapsed time on the
+device and web page. Large cards can take minutes. Enter, Esc, or the web Cancel
+scan button cancels without replacing the previous library. Playback is stopped
+during scanning; successful scans restore the saved song and position paused.
+Uploads, playlist edits, and games are blocked until the scan finishes or is
+cancelled. Failed reads/writes keep the previous index and report an error.
+The top-right battery icon shows remaining charge beside Wi-Fi, with a low-battery
+color at 20% or less; the percentage is the board library's voltage-based estimate.
 Alternatively, connect through the web interface and use Add files / Add folder.
 Uploads pause playback, retain folder names, and do not overwrite existing files.
 The keyboard also pauses while a file is transferring. Leave the player powered
@@ -224,6 +233,13 @@ Playlist pages are capped at 16 entries to bound RAM use with long paths. Reques
 for the former 32-entry limit are accepted but return at most 16; follow
 `next_offset`. There is no new cloud service or credential. Status also reports
 `playlist_track_limit` and `library_track_limit`.
+
+`POST /api/control` with `action=rescan` returns **202 when the scan starts**, not
+when it finishes. Poll `GET /api/status`: `scan` contains `active`, `scanned`,
+`skipped`, `elapsed_ms`, `path`, `succeeded`, and `error`. Check `succeeded` after
+`active` becomes false. `action=cancel-scan` cancels the current scan. The CLI
+exposes these as `cardtunes rescan`, `cardtunes status`, and `cardtunes cancel-scan`.
+The published track count and track IDs stay unchanged until a successful scan.
 
 USB serial accepts newline-delimited JSON commands, including `{"cmd":"status"}`
 and `{"cmd":"info"}`. **Info includes the access key**: never publish its output.

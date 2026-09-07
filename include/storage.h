@@ -2,6 +2,8 @@
 #include <SD.h>
 #include <LittleFS.h>
 #include <mutex>
+#include <array>
+#include <dirent.h>
 #include "media.h"
 #include "playlists.h"
 
@@ -33,8 +35,17 @@ template<size_t N> void copyText(char (&target)[N], const std::string& source) {
 class Library {
 public:
     static constexpr uint32_t MaxTracks = 10000;
+    explicit Library(const char* mountPoint = "/sd") : mountPoint_(mountPoint) {}
     bool begin();
-    bool scan(void (*progress)(uint32_t) = nullptr);
+    bool scan();
+    void scanStep();
+    void cancelScan();
+    bool scanning() const { return scanDepth_ >= 0; }
+    uint32_t scanned() const { return scanned_; }
+    uint32_t scanElapsed() const { return scanning() ? millis() - scanStarted_ : scanElapsed_; }
+    const std::string& scanError() const { return scanError_; }
+    const std::string& scanPath() const { return scanPath_; }
+    bool scanSucceeded() const { return scanSucceeded_; }
     bool append(const char* path);
     bool get(uint32_t id, Track& track);
     bool available(const char* path);
@@ -44,8 +55,16 @@ public:
     uint32_t skipped() const { return skipped_; }
     bool mounted() const { return mounted_; }
 private:
-    bool walk(const std::string& path, unsigned depth, File& index, void (*progress)(uint32_t));
     bool record(const char* path, File& index);
+    void finishScan(bool success, const char* error = "");
+    struct Directory { DIR* handle = nullptr; std::string path; };
+    std::array<Directory, 9> directories_;
+    const char* mountPoint_;
+    File scanIndex_;
+    int scanDepth_ = -1;
+    uint32_t scanned_ = 0, scanStarted_ = 0, scanElapsed_ = 0;
+    std::string scanError_, scanPath_;
+    bool scanSucceeded_ = false;
     bool mounted_ = false;
     bool demo_ = false;
     uint32_t count_ = 0, skipped_ = 0;

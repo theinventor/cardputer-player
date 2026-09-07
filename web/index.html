@@ -19,6 +19,7 @@
 <div class="transport"><button class="icon" data-action="previous" title="Previous track" aria-label="Previous track" data-icon="skip-back"></button><button id="toggle" class="icon primary" data-action="toggle" title="Play or pause" aria-label="Play or pause" data-icon="play"></button><button class="icon" data-action="next" title="Next track" aria-label="Next track" data-icon="skip-forward"></button><button id="shuffle" class="icon" title="Shuffle" aria-label="Shuffle" aria-pressed="false" data-icon="shuffle"></button><select id="repeat" aria-label="Repeat mode"><option value="off">Repeat off</option><option value="all">Repeat all</option><option value="one">Repeat one</option></select><div class="volume"><span data-icon="volume-2"></span><input id="volume" type="range" min="0" max="100" value="20" aria-label="Volume"><span id="volValue" class="muted">20</span></div></div>
 <p id="playbackScope">All music</p>
 <div class="playlist-bar"><label for="playlistPicker">Playlists</label><select id="playlistPicker"><option value="0">All music</option></select><button id="playPlaylist" class="icon primary" title="Play selected list" aria-label="Play selected list" data-icon="play"></button><button id="createPlaylist" class="icon" title="New playlist" aria-label="New playlist" data-icon="plus"></button><button id="renamePlaylist" class="icon" title="Rename playlist" aria-label="Rename playlist" data-icon="pencil" disabled></button><button id="deletePlaylist" class="icon" title="Delete playlist" aria-label="Delete playlist" data-icon="x" disabled></button></div>
+<div id="scanProgress" hidden><span id="scanText" role="status"></span><button id="cancelScan" class="icon" title="Cancel scan" aria-label="Cancel scan" data-icon="x"></button></div>
 <div class="workspace"><section><div class="library-head"><h2 id="libraryTitle">Library</h2><input id="search" type="search" placeholder="Search music" maxlength="64" aria-label="Search music"><button id="rescan" class="icon" title="Rescan microSD" aria-label="Rescan microSD" data-icon="refresh-cw"></button></div><p id="playlistCount" class="playlist-count" hidden></p><ul id="tracks"></ul><p id="empty" class="empty" hidden>No matching tracks</p><button id="more" hidden>Load more</button></section><aside class="queue"><div class="bar"><h2>Up next</h2><button id="clearQueue" class="icon" title="Clear queue" aria-label="Clear queue" data-icon="x"></button></div><ol id="queue"></ol><p id="queueEmpty" class="muted">Queue is empty</p></aside></div>
 <section class="uploads"><div class="bar"><h2>Add music</h2><div class="group"><button id="addFiles"><span data-icon="upload"></span>Add files</button><button id="addFolder">Add folder</button></div></div><input id="files" type="file" accept=".mp3,audio/mpeg" multiple hidden><input id="folder" type="file" webkitdirectory multiple hidden><progress id="uploadProgress" value="0" max="100" hidden></progress><p id="uploadStatus" class="muted" role="status"></p></section>
 <footer><span id="storage"></span><span id="battery"></span><span id="network"></span><span id="version"></span></footer>
@@ -47,7 +48,7 @@ async function refresh() {
   if (!key || refreshing || uploading) return;
   refreshing=true;
   try {
-    const data=await request('/api/status'); state=data;
+    const data=await request('/api/status'), wasScanning=!!state?.scan?.active; state=data;
     $('player').hidden=false; $('pair').hidden=true; $('logout').hidden=false;
     localStorage.setItem('cardtunes.key',key);
     $('connection').textContent='Connected'; $('connection').classList.add('online');
@@ -63,12 +64,19 @@ async function refresh() {
     $('createPlaylist').disabled=!data.sd_mounted || playlists.length>=16;
     $('storage').textContent=`${data.tracks} tracks / ${data.sd_mounted?'microSD ready':'no microSD'}`;
     $('battery').textContent=`Battery ${data.battery_percent}%`; $('network').textContent=data.ssid; $('version').textContent=`v${data.version}`;
-    $('addFiles').disabled=$('addFolder').disabled=!data.sd_mounted;
+    const scanning=!!data.scan?.active;
+    $('scanProgress').hidden=!scanning;
+    $('scanText').textContent=scanning?`Scanning: ${data.scan.scanned} tracks / ${Math.floor(data.scan.elapsed_ms/1000)}s`:'';
+    $('rescan').disabled=scanning;
+    $('addFiles').disabled=$('addFolder').disabled=!data.sd_mounted||scanning;
+    if(scanning)document.querySelectorAll('#tracks button,#createPlaylist,#renamePlaylist,#deletePlaylist,#playPlaylist,[data-action]').forEach(button=>button.disabled=true);
+    else document.querySelectorAll('[data-action],#playPlaylist').forEach(button=>button.disabled=false);
     const ctx=$('spectrum').getContext('2d'); ctx.clearRect(0,0,352,70);
     (data.bands||[]).forEach((level,i)=>{ctx.fillStyle=i<11?'#d2f36b':'#f098ab';const h=data.state==='playing'?Math.max(2,level*.65):2;ctx.fillRect(i*22,70-h,15,h);});
     if(coverID!==data.track?.id){coverID=data.track?.id;loadCover();}
     if(data.error) message(data.error);
     document.querySelectorAll('.track').forEach(el=>el.classList.toggle('current',Number(el.dataset.id)===data.track?.id));
+    if(wasScanning&&!scanning){await loadPlaylists();await loadLibrary();await loadQueue();message(data.scan.error||data.notice||'Library updated');}
   } catch(error) { $('connection').textContent='Disconnected';$('connection').classList.remove('online');message(error.message); }
   finally { refreshing=false; }
 }
@@ -89,7 +97,7 @@ function drawTracks(){
     const play=button('play',`Play ${track.title}`,async()=>{
       if(viewedPlaylist && state?.active_playlist_id!==viewedPlaylist){await command('playlist',viewedPlaylist,{track:String(track.id)});return;}
       await command(viewedPlaylist?'play':'play-library',track.id);
-    });play.disabled=!!track.missing;
+    });play.disabled=!!track.missing||!!state?.scan?.active;
     li.append(n,label,play);
     if(viewedPlaylist){
       const remove=button('x',`Remove ${track.title}`,()=>mutatePlaylist('remove',track.position));
@@ -99,6 +107,7 @@ function drawTracks(){
     }else{
       li.append(button('plus',`Queue ${track.title}`,()=>command('enqueue',track.id)),button('list-music',`Add ${track.title} to playlist`,()=>openPlaylistDialog('add',track)));
     }
+    if(state?.scan?.active)li.querySelectorAll('button').forEach(button=>button.disabled=true);
     $('tracks').append(li);
   });$('empty').hidden=shown.length>0;$('empty').textContent=viewedPlaylist&&!tracks.length?'Playlist is empty':'No matching tracks';$('more').hidden=viewedPlaylist!==0||nextOffset<0;
 }
@@ -119,8 +128,8 @@ async function loadPlaylists(){
   const data=await request('/api/playlists');playlists=data.playlists;
   if(viewedPlaylist&&!playlists.some(p=>p.id===viewedPlaylist))viewedPlaylist=0;
   $('playlistPicker').replaceChildren(new Option('All music','0'),...playlists.map(p=>new Option(p.name,String(p.id))));
-  $('playlistPicker').value=String(viewedPlaylist);$('renamePlaylist').disabled=$('deletePlaylist').disabled=!viewedPlaylist;
-  $('createPlaylist').disabled=!state?.sd_mounted||playlists.length>=16;
+  $('playlistPicker').value=String(viewedPlaylist);$('renamePlaylist').disabled=$('deletePlaylist').disabled=!viewedPlaylist||!!state?.scan?.active;
+  $('createPlaylist').disabled=!state?.sd_mounted||playlists.length>=16||!!state?.scan?.active;
 }
 async function mutatePlaylist(action,value='',to=''){
   if(playlistBusy)return;playlistBusy=true;
@@ -168,7 +177,7 @@ document.querySelectorAll('[data-action]').forEach(b=>b.onclick=()=>command(b.da
 $('shuffle').onclick=()=>command('shuffle',state?.shuffle?'off':'on');$('repeat').onchange=()=>command('repeat',$('repeat').value);
 $('seek').onchange=()=>command('seek',$('seek').value);$('volume').oninput=()=>$('volValue').textContent=$('volume').value;$('volume').onchange=()=>command('volume',$('volume').value);
 $('search').oninput=()=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>viewedPlaylist?drawTracks():loadLibrary(),250);};$('more').onclick=()=>loadLibrary(true);
-$('clearQueue').onclick=()=>command('clear-queue');$('rescan').onclick=async()=>{if(await command('rescan')){await loadPlaylists();await loadLibrary();await loadQueue();}};
+$('clearQueue').onclick=()=>command('clear-queue');$('rescan').onclick=()=>command('rescan');$('cancelScan').onclick=()=>command('cancel-scan');
 $('addFiles').onclick=()=>$('files').click();$('addFolder').onclick=()=>$('folder').click();
 function uploadFile(file,index,total){return new Promise((resolve,reject)=>{
   const path='/Music/'+(file.webkitRelativePath||file.name);const xhr=new XMLHttpRequest();xhr.open('POST',`/api/upload?size=${file.size}&path=${encodeURIComponent(path)}`);xhr.setRequestHeader('Authorization',`Bearer ${key}`);xhr.timeout=300000;
