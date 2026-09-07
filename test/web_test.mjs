@@ -7,8 +7,9 @@ await new Promise(resolve=>mock.server.listen(0,'127.0.0.1',resolve));
 const origin=`http://127.0.0.1:${mock.server.address().port}`;
 const browser=await chromium.launch({headless:true});
 mkdirSync('build/screenshots',{recursive:true});
+let page;
 try {
-  const page=await browser.newPage({viewport:{width:1280,height:900}});
+  page=await browser.newPage({viewport:{width:1280,height:900}});
   const errors=[];page.on('pageerror',error=>errors.push(error.message));
   await page.goto(origin);
   await page.waitForFunction(()=>document.querySelectorAll('#tracks li').length===4);
@@ -209,6 +210,14 @@ try {
   await page.unroute(queueRoute);
   assert.deepEqual(errors,[]);
   console.log('Web playlist CRUD, library/queue pagination (8/16 tracks), legacy queue, duplicate order, failed/stale queue reads, scope, missing files, errors, and responsive screenshots passed (mock API; no device used).');
+} catch(error) {
+  console.error('Mock state:',mock.state);
+  console.error('Recent controls:',mock.requests.filter(r=>r.path==='/api/control').slice(-8));
+  if(page){
+    console.error('Browser state:',await page.evaluate(()=>({state,viewedPlaylist,hidden:document.hidden,notice:document.querySelector('#notice').textContent,rows:[...document.querySelectorAll('#tracks li')].map(e=>({id:e.dataset.id,position:e.dataset.position,current:e.classList.contains('current')}))})));
+    await page.screenshot({path:'build/screenshots/web-failure.png',fullPage:true});
+  }
+  throw error;
 } finally {
   await browser.close();
   await new Promise(resolve=>mock.server.close(resolve));

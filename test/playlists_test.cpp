@@ -3,6 +3,7 @@
 #include <cJSON.h>
 #include <cassert>
 #include <cstdlib>
+#include <cstring>
 #include <iostream>
 #include <map>
 #include <set>
