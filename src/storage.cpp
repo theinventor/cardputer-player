@@ -124,6 +124,43 @@ bool Library::available(const char* path) {
     File file = !strcmp(path, "/@demo.mp3") ? LittleFS.open("/demo.mp3", FILE_READ) : SD.open(path, FILE_READ);
     return file && !file.isDirectory() && file.size() > 0;
 }
+namespace {
+class PlaylistSDReader : public SDReader {
+public:
+    size_t read(void* data, size_t bytes) override {
+        size_t result = SDReader::read(data, bytes);
+        if (!(++reads_ % 16)) delay(1);
+        return result;
+    }
+private:
+    unsigned reads_ = 0;
+};
+class PlaylistSDWriter : public PlaylistWriter {
+public:
+    explicit PlaylistSDWriter(File file) : file_(file) {}
+    bool write(const std::string& chunk) override {
+        bool ok;
+        { SDLock lock(sdMutex); ok = file_.write(reinterpret_cast<const uint8_t*>(chunk.data()), chunk.size()) == chunk.size(); }
+        if (!(++writes_ % 16)) delay(1);
+        return ok;
+    }
+    bool finish() override { SDLock lock(sdMutex); file_.flush(); file_.close(); return true; }
+private:
+    File file_;
+    unsigned writes_ = 0;
+};
+}
+std::unique_ptr<Reader> SDPlaylistFiles::openReader(const std::string& path) {
+    auto file = std::make_unique<PlaylistSDReader>();
+    if (!file->open(path.c_str())) return nullptr;
+    return file;
+}
+std::unique_ptr<PlaylistWriter> SDPlaylistFiles::openWriter(const std::string& path) {
+    SDLock lock(sdMutex);
+    File file = SD.open(path.c_str(), FILE_WRITE);
+    if (!file) return nullptr;
+    return std::make_unique<PlaylistSDWriter>(file);
+}
 bool SDPlaylistFiles::read(const std::string& path, std::string& data, size_t maximum) {
     SDLock lock(sdMutex);
     File file = SD.open(path.c_str(), FILE_READ);

@@ -8,8 +8,9 @@
 namespace ct {
 String jsonString(cJSON* json) {
     char* raw = cJSON_PrintUnformatted(json);
+    cJSON_Delete(json);
     String result = raw ? raw : "{}";
-    cJSON_free(raw); cJSON_Delete(json); return result;
+    cJSON_free(raw); return result;
 }
 bool parseNumber(const String& text, uint32_t maximum, uint32_t& value) {
     if (text.isEmpty()) return false;
@@ -134,19 +135,27 @@ bool App::rescan() {
     notice = ok ? "Library updated" : "No microSD detected";
     return ok;
 }
-std::vector<uint32_t> App::resolvePlaylist(const Playlist& playlist) {
-    std::map<std::string_view, int> wanted;
-    for (const auto& path : playlist.paths) wanted.emplace(path, -1);
+std::vector<uint32_t> App::resolvePlaylist(const Playlist& playlist, bool keepMissing) {
+    std::vector<std::pair<uint64_t, uint32_t>> wanted;
+    wanted.reserve(playlist.paths.size());
+    if (!playlist.paths.each([&](size_t i, const std::string& path) {
+        wanted.emplace_back(Playlists::pathHash(path), i); return true;
+    })) return {};
+    std::sort(wanted.begin(), wanted.end());
+    std::vector<uint32_t> ids(playlist.paths.size(), UINT32_MAX);
     Track track;
     for (uint32_t i = 0; i < library.count(); ++i) {
         if (library.get(i, track)) {
-            auto found = wanted.find(track.path);
-            if (found != wanted.end() && library.available(track.path)) found->second = i;
+            uint64_t hash = Playlists::pathHash(track.path);
+            auto found = std::lower_bound(wanted.begin(), wanted.end(), std::make_pair(hash, uint32_t(0)));
+            for (; found != wanted.end() && found->first == hash; ++found) {
+                std::string path;
+                if (playlist.paths.read(found->second, path) && path == track.path && library.available(track.path)) ids[found->second] = i;
+            }
         }
         if (!(i % 32)) delay(1);
     }
-    std::vector<uint32_t> ids;
-    for (const auto& path : playlist.paths) if (wanted[path] >= 0) ids.push_back(wanted[path]);
+    if (!keepMissing) ids.erase(std::remove(ids.begin(), ids.end(), UINT32_MAX), ids.end());
     return ids;
 }
 void App::restorePlaylist() {
@@ -200,19 +209,18 @@ bool App::editPlaylist(const String& action, uint32_t& id, const String& value, 
     else if (action == "add") {
         Track track;
         if (!parseNumber(value, Library::MaxTracks, n) || !library.get(n, track)) { error = "Track not found"; return false; }
-        if (std::find(playlist.paths.begin(), playlist.paths.end(), track.path) != playlist.paths.end()) { error = "Track is already in this playlist"; return false; }
-        if (playlist.paths.size() >= Playlists::MaxTracks) { error = "Playlist limit reached (128 tracks)"; return false; }
-        playlist.paths.emplace_back(track.path);
+        if (playlist.paths.contains(track.path)) { error = "Track is already in this playlist"; return false; }
+        if (playlist.paths.size() >= Playlists::MaxTracks) { error = "Playlist limit reached (1000 tracks)"; return false; }
+        playlist.paths.push_back(track.path);
     } else if (action == "remove" || action == "move") {
         if (playlist.paths.empty() || !parseNumber(value, playlist.paths.size() - 1, n) || (action == "move" && to >= playlist.paths.size())) { error = "Invalid playlist position"; return false; }
-        std::string path = playlist.paths[n];
-        playlist.paths.erase(playlist.paths.begin() + n);
-        if (action == "move") playlist.paths.insert(playlist.paths.begin() + to, path);
+        if (action == "move") playlist.paths.move(n, to); else playlist.paths.erase(n);
     } else { error = "Unknown playlist action"; return false; }
     bool removingCurrent = activePlaylist == id && currentTrack.path[0] &&
-        std::find(playlist.paths.begin(), playlist.paths.end(), currentTrack.path) == playlist.paths.end();
+        !playlist.paths.contains(currentTrack.path);
     if (removingCurrent && !audio.stopAndWait()) { error = "Player is busy"; return false; }
     if (!playlists.save(playlist)) { error = playlists.error().c_str(); return false; }
+    if (!playlists.load(id, playlist)) { error = playlists.error().c_str(); return false; }
     if (activePlaylist == id) {
         playlistName = playlist.name.c_str();
         if (action != "rename") order.replace(resolvePlaylist(playlist));
@@ -221,6 +229,8 @@ bool App::editPlaylist(const String& action, uint32_t& id, const String& value, 
     return true;
 }
 cJSON* App::playlistJson(uint32_t id, uint32_t offset, uint32_t limit) {
+    // Long missing paths include both path and title; bound the response heap too.
+    limit = std::min<uint32_t>(limit, 16);
     auto json = cJSON_CreateObject();
     cJSON_AddNumberToObject(json, "active_playlist_id", activePlaylist);
     if (!id) {
@@ -235,25 +245,25 @@ cJSON* App::playlistJson(uint32_t id, uint32_t offset, uint32_t limit) {
     } else {
         Playlist playlist;
         if (!playlists.load(id, playlist)) { cJSON_Delete(json); return nullptr; }
-        auto ids = resolvePlaylist(playlist);
-        std::map<std::string, uint32_t> available;
-        Track track;
-        for (auto trackId : ids) if (library.get(trackId, track)) available[track.path] = trackId;
+        auto ids = resolvePlaylist(playlist, true);
+        if (ids.size() != playlist.paths.size()) { cJSON_Delete(json); return nullptr; }
         cJSON_AddNumberToObject(json, "id", id);
         cJSON_AddStringToObject(json, "name", playlist.name.c_str());
         cJSON_AddNumberToObject(json, "count", playlist.paths.size());
-        cJSON_AddNumberToObject(json, "available", ids.size());
+        cJSON_AddNumberToObject(json, "available", std::count_if(ids.begin(), ids.end(), [](uint32_t id) { return id != UINT32_MAX; }));
         auto tracks = cJSON_AddArrayToObject(json, "tracks");
         uint32_t end = std::min<uint32_t>(playlist.paths.size(), offset + limit);
         for (uint32_t i = offset; i < end; ++i) {
-            auto found = available.find(playlist.paths[i]);
-            auto entry = found == available.end() ? cJSON_CreateObject() : trackJson(found->second);
-            if (found == available.end()) {
+            bool missing = ids[i] == UINT32_MAX;
+            auto entry = missing ? cJSON_CreateObject() : trackJson(ids[i]);
+            if (missing) {
+                std::string path;
+                if (!playlist.paths.read(i, path)) { cJSON_Delete(entry); cJSON_Delete(json); return nullptr; }
                 cJSON_AddNullToObject(entry, "id");
-                cJSON_AddStringToObject(entry, "path", playlist.paths[i].c_str());
-                cJSON_AddStringToObject(entry, "title", basename(playlist.paths[i]).c_str());
+                cJSON_AddStringToObject(entry, "path", path.c_str());
+                cJSON_AddStringToObject(entry, "title", basename(path).c_str());
             }
-            cJSON_AddBoolToObject(entry, "missing", found == available.end());
+            cJSON_AddBoolToObject(entry, "missing", missing);
             cJSON_AddNumberToObject(entry, "position", i);
             cJSON_AddItemToArray(tracks, entry);
         }
@@ -302,7 +312,9 @@ cJSON* App::status() {
     auto s = audio.state();
     auto object = cJSON_CreateObject();
     cJSON_AddStringToObject(object, "name", "Cardtunes");
-    cJSON_AddStringToObject(object, "version", "0.3.0");
+    cJSON_AddStringToObject(object, "version", "0.3.1");
+    cJSON_AddNumberToObject(object, "playlist_track_limit", Playlists::MaxTracks);
+    cJSON_AddNumberToObject(object, "library_track_limit", Library::MaxTracks);
     auto game = cJSON_AddObjectToObject(object, "game");
     cJSON_AddStringToObject(game, "id", gameSlug(games.active()));
     cJSON_AddStringToObject(game, "name", gameName(games.active()));

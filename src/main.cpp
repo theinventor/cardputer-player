@@ -1,6 +1,9 @@
 #include "app.h"
 #include "display.h"
 #include "web.h"
+#ifdef CARDTUNES_PLAYLIST_TEST
+#include "../test/large_playlist_fixture.h"
+#endif
 
 ct::App app;
 ct::Display screen(app);
@@ -17,6 +20,9 @@ void setup() {
     M5Cardputer.Display.setTextSize(2);
     M5Cardputer.Display.println("Cardtunes");
     app.begin();
+#ifdef CARDTUNES_PLAYLIST_TEST
+    installLargePlaylistFixture(app);
+#endif
     screen.begin();
     web.begin();
 }

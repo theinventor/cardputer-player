@@ -25,6 +25,8 @@ func TestPlaylistCommands(t *testing.T) {
 		{[]string{"add", "2", "42"}, "/api/playlists", "POST", "add", "2", "42", ""},
 		{[]string{"remove", "2", "0"}, "/api/playlists", "POST", "remove", "2", "0", ""},
 		{[]string{"move", "2", "3", "0"}, "/api/playlists", "POST", "move", "2", "3", "0"},
+		{[]string{"move", "2", "999", "500"}, "/api/playlists", "POST", "move", "2", "999", "500"},
+		{[]string{"remove", "2", "999"}, "/api/playlists", "POST", "remove", "2", "999", ""},
 		{[]string{"delete", "2"}, "/api/playlists", "POST", "delete", "2", "", ""},
 		{[]string{"play", "2"}, "/api/control", "POST", "playlist", "", "2", ""},
 		{[]string{"play", "all"}, "/api/control", "POST", "playlist", "", "all", ""},
@@ -122,10 +124,40 @@ func TestPlaylistValidationDoesNotContactDevice(t *testing.T) {
 	}))
 	defer server.Close()
 	client := newClient(Config{URL: server.URL, Token: "test-key"})
-	for _, args := range [][]string{{"create"}, {"create", ""}, {"create", strings.Repeat("x", 64)}, {"create", "bad\nname"}, {"rename", "2"}, {"rename", "0", "Name"}, {"delete", "17"}, {"add", "1", "-1"}, {"move", "1", "0"}, {"move", "1", "0", "128"}, {"remove", "1", "128"}, {"show", "all"}, {"play", "0"}, {"play", "missing"}, {"unknown"}} {
+	for _, args := range [][]string{{"create"}, {"create", ""}, {"create", strings.Repeat("x", 64)}, {"create", "bad\nname"}, {"rename", "2"}, {"rename", "0", "Name"}, {"delete", "17"}, {"add", "1", "-1"}, {"move", "1", "0"}, {"move", "1", "0", "1000"}, {"remove", "1", "1000"}, {"show", "all"}, {"play", "0"}, {"play", "missing"}, {"unknown"}} {
 		if _, err := client.playlist(args); err == nil {
 			t.Errorf("accepted %v", args)
 		}
+	}
+}
+
+func TestThousandTrackPlaylistPagination(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+		end := min(offset+32, 1000)
+		tracks := []map[string]int{}
+		for i := offset; i < end; i++ {
+			tracks = append(tracks, map[string]int{"id": i, "position": i})
+		}
+		next := end
+		if end == 1000 {
+			next = -1
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": 1, "count": 1000, "available": 1000, "tracks": tracks, "next_offset": next})
+	}))
+	defer server.Close()
+	data, err := newClient(Config{URL: server.URL}).playlist([]string{"show", "1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result struct{ Tracks []map[string]int }
+	if err = json.Unmarshal(data, &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Tracks) != 1000 || result.Tracks[999]["position"] != 999 || requests != 32 {
+		t.Fatalf("truncated large playlist: %d tracks, %d requests", len(result.Tracks), requests)
 	}
 }
 

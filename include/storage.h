@@ -57,6 +57,8 @@ public:
     bool exists(const std::string& path) override { SDLock lock(sdMutex); return SD.exists(path.c_str()); }
     bool read(const std::string& path, std::string& data, size_t maximum) override;
     bool write(const std::string& path, const std::string& data) override;
+    std::unique_ptr<Reader> openReader(const std::string& path) override;
+    std::unique_ptr<PlaylistWriter> openWriter(const std::string& path) override;
     bool rename(const std::string& from, const std::string& to) override { SDLock lock(sdMutex); return SD.rename(from.c_str(), to.c_str()); }
     bool remove(const std::string& path) override { SDLock lock(sdMutex); return SD.remove(path.c_str()); }
 private:

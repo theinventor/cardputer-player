@@ -23,6 +23,9 @@ type Config struct {
 	URL   string `json:"url"`
 	Token string `json:"token"`
 }
+
+const maxPlaylistTracks = 1000
+
 type Client struct {
 	Config
 	HTTP *http.Client
@@ -111,7 +114,7 @@ func (c *Client) playlist(args []string) ([]byte, error) {
 			if page.Next < 0 {
 				break
 			}
-			if page.Next <= offset || page.Next > 128 {
+			if page.Next <= offset || page.Next >= maxPlaylistTracks {
 				return nil, errors.New("device returned an invalid playlist cursor")
 			}
 			offset = page.Next
@@ -154,7 +157,7 @@ func (c *Client) playlist(args []string) ([]byte, error) {
 		values.Set("value", name)
 	}
 	if action == "add" || action == "remove" || action == "move" {
-		max := 127
+		max := maxPlaylistTracks - 1
 		if action == "add" {
 			max = 10000
 		}
@@ -165,7 +168,7 @@ func (c *Client) playlist(args []string) ([]byte, error) {
 		values.Set("value", value)
 	}
 	if action == "move" {
-		to, err := playlistNumber(args[3], 0, 127)
+		to, err := playlistNumber(args[3], 0, maxPlaylistTracks-1)
 		if err != nil {
 			return nil, err
 		}

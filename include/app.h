@@ -57,7 +57,7 @@ private:
     bool resumeAfterGame_ = false;
     uint32_t lastGameSave_ = 0;
     String serialLine_;
-    std::vector<uint32_t> resolvePlaylist(const Playlist& playlist);
+    std::vector<uint32_t> resolvePlaylist(const Playlist& playlist, bool keepMissing = false);
     void restorePlaylist();
     void serial();
 };

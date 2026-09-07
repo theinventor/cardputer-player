@@ -9,9 +9,41 @@ class MemoryFiles : public ct::PlaylistFiles {
 public:
     std::map<std::string, std::string> data;
     bool mounted = true, failWrite = false, failFinalize = false, failRestore = false, corruptWrite = false;
+    size_t maxRead = 0, wholeReads = 0;
+    class Input : public ct::Reader {
+    public:
+        Input(MemoryFiles& files, const std::string& path) : files_(files), path_(path) {}
+        size_t read(void* data, size_t n) override {
+            files_.maxRead = std::max(files_.maxRead, n);
+            auto& value = files_.data.at(path_);
+            n = std::min(n, value.size() - offset_);
+            memcpy(data, value.data() + offset_, n); offset_ += n; return n;
+        }
+        bool seek(uint32_t at) override { if (at > size()) return false; offset_ = at; return true; }
+        uint32_t size() const override { return files_.data.at(path_).size(); }
+    private:
+        MemoryFiles& files_; std::string path_; size_t offset_ = 0;
+    };
+    class Output : public ct::PlaylistWriter {
+    public:
+        Output(MemoryFiles& files, const std::string& path) : files_(files), path_(path) { files_.data[path].clear(); }
+        bool write(const std::string& data) override {
+            files_.data[path_] += files_.corruptWrite ? "partial" : data;
+            return !files_.failWrite;
+        }
+        bool finish() override { return true; }
+    private:
+        MemoryFiles& files_; std::string path_;
+    };
+    std::unique_ptr<ct::Reader> openReader(const std::string& path) override {
+        if (!exists(path)) return nullptr;
+        return std::make_unique<Input>(*this, path);
+    }
+    std::unique_ptr<ct::PlaylistWriter> openWriter(const std::string& path) override { return std::make_unique<Output>(*this, path); }
     bool ready() const override { return mounted; }
     bool exists(const std::string& path) override { return data.count(path); }
     bool read(const std::string& path, std::string& out, size_t maximum) override {
+        ++wholeReads;
         auto it = data.find(path);
         if (it == data.end() || it->second.size() > maximum) return false;
         out = it->second; return true;
@@ -27,7 +59,13 @@ public:
     }
     bool remove(const std::string& path) override { return data.erase(path); }
 };
+static std::vector<std::string> values(const ct::PlaylistPaths& paths) {
+    std::vector<std::string> result;
+    assert(paths.each([&](size_t, const std::string& path) { result.push_back(path); return true; }));
+    return result;
+}
 int main() {
+    static_assert(ct::Playlists::MaxTracks == 1000);
     MemoryFiles files;
     ct::Playlists lists(files);
     assert(lists.begin()); assert(lists.list().empty());
@@ -40,19 +78,20 @@ int main() {
     assert(!lists.create(std::string(64, 'x'), ignored));
     ct::Playlist playlist;
     assert(lists.load(road, playlist));
-    playlist.paths = {"/Music/Artist/Track 2.mp3", "/Music/Artist/Track 1.mp3", "/@demo.mp3"};
+    for (const auto& path : {"/Music/Artist/Track 2.mp3", "/Music/Artist/Track 1.mp3", "/@demo.mp3"}) playlist.paths.push_back(path);
     assert(lists.save(playlist));
     ct::Playlists reboot(files);
     assert(reboot.begin()); assert(reboot.list().size() == 2);
     ct::Playlist restored;
     assert(reboot.load(road, restored));
-    assert(restored.paths == playlist.paths); assert(restored.name == "Road trip");
+    assert(values(restored.paths) == values(playlist.paths)); assert(restored.name == "Road trip");
     restored.name = "Road trip \"2026\"";
     assert(reboot.save(restored)); assert(reboot.list()[0].name == restored.name);
+    assert(reboot.load(road, restored));
     auto good = restored;
-    restored.paths.push_back(restored.paths[0]); assert(!reboot.save(restored));
-    restored = good; restored.paths[0] = "/Music/../secret.mp3"; assert(!reboot.save(restored));
-    restored = good; restored.paths[0] = "/Music/not-music.wav"; assert(!reboot.save(restored));
+    restored.paths.push_back(values(restored.paths)[0]); assert(!reboot.save(restored));
+    restored = good; restored.paths.push_back("/Music/../secret.mp3"); assert(!reboot.save(restored));
+    restored = good; restored.paths.push_back("/Music/not-music.wav"); assert(!reboot.save(restored));
     restored = good;
     for (uint32_t i = 0; i < ct::Playlists::MaxTracks; ++i) restored.paths.push_back("/Music/" + std::to_string(i) + ".mp3");
     assert(!reboot.save(restored));
@@ -61,7 +100,7 @@ int main() {
         "{\"version\":1,\"name\":\"x\",\"paths\":[\"/a.mp3\",\"/a.mp3\"]}"}) assert(!ct::Playlists::decode(data, restored));
     assert(!ct::Playlists::decode(ct::Playlists::encode(good) + " trailing", restored));
     assert(!ct::Playlists::decode(std::string(40000, 'x'), restored));
-    assert(ct::Playlists::decode(ct::Playlists::encode(good), restored)); assert(restored.paths == good.paths);
+    assert(ct::Playlists::decode(ct::Playlists::encode(good), restored)); assert(values(restored.paths) == values(good.paths));
     for (int failure = 0; failure < 4; ++failure) {
         files.failWrite = failure == 0; files.corruptWrite = failure == 1;
         files.failFinalize = failure >= 2; files.failRestore = failure == 3;
@@ -69,10 +108,10 @@ int main() {
         assert(!reboot.save(edit));
         files.failWrite = files.corruptWrite = files.failFinalize = files.failRestore = false;
         ct::Playlists afterCrash(files); assert(afterCrash.begin());
-        assert(afterCrash.load(road, restored)); assert(restored.name == good.name); assert(restored.paths == good.paths);
+        assert(afterCrash.load(road, restored)); assert(restored.name == good.name); assert(values(restored.paths) == values(good.paths));
     }
-    const auto file = "/.cardtunes/playlist-" + std::to_string(road) + ".json";
-    files.data[file + ".bak"] = ct::Playlists::encode(good); files.data[file] = "corrupt";
+    const auto file = "/.cardtunes/playlist-" + std::to_string(road) + ".jsonl";
+    files.data[file + ".bak"] = files.data[file]; files.data[file] = "corrupt";
     assert(reboot.load(road, restored)); assert(restored.name == good.name);
     files.mounted = false; assert(!reboot.create("Offline", ignored)); assert(!reboot.erase(road));
     files.mounted = true;
@@ -82,7 +121,40 @@ int main() {
     assert(!afterDelete.create("One too many", ignored));
     ct::Playlist maximum{quiet, "Maximum", {}};
     for (uint32_t i = 0; i < ct::Playlists::MaxTracks; ++i) maximum.paths.push_back("/Music/" + std::string(160, 'x') + std::to_string(i) + ".mp3");
-    assert(afterDelete.save(maximum)); assert(afterDelete.load(quiet, restored)); assert(restored.paths == maximum.paths);
+    assert(afterDelete.save(maximum));
+    auto reads = files.wholeReads;
+    assert(afterDelete.load(quiet, restored)); assert(values(restored.paths) == values(maximum.paths));
+    assert(files.wholeReads == reads && files.maxRead <= 512);
+    std::string last;
+    assert(restored.paths.read(999, last) && last == values(maximum.paths).back());
+    restored.paths.move(999, 0);
+    assert(afterDelete.save(restored)); assert(afterDelete.load(quiet, restored));
+    assert(restored.paths.read(0, last) && last == values(maximum.paths).back());
+    restored.paths.erase(500); restored.paths.push_back("/Music/Replacement.mp3");
+    assert(afterDelete.save(restored)); assert(afterDelete.load(quiet, restored));
+    assert(restored.paths.read(999, last) && last == "/Music/Replacement.mp3");
+    restored.paths.push_back("/Music/Too many.mp3"); assert(!afterDelete.save(restored));
+    ct::Playlists largeReboot(files); assert(largeReboot.begin());
+    assert(largeReboot.load(quiet, restored)); assert(restored.paths.size() == 1000);
+
+    MemoryFiles legacyFiles;
+    auto legacyPath = "/.cardtunes/playlist-1.json";
+    ct::Playlist old{1, "Existing playlist", {}}; old.paths.push_back("/Music/Old.mp3");
+    legacyFiles.data[legacyPath + std::string(".bak")] = ct::Playlists::encode(old);
+    ct::Playlists migration(legacyFiles); assert(migration.begin());
+    assert(migration.load(1, restored)); assert(values(restored.paths) == values(old.paths));
+    restored.paths.push_back("/Music/New.mp3"); assert(migration.save(restored));
+    assert(!legacyFiles.exists(legacyPath)); assert(legacyFiles.exists("/.cardtunes/playlist-1.jsonl"));
+    assert(migration.load(1, restored)); assert(restored.paths.size() == 2);
+    const auto migrated = legacyFiles.data["/.cardtunes/playlist-1.jsonl"];
+    for (const auto& broken : {migrated.substr(0, migrated.size() - 1), migrated + "extra\n",
+        std::string("{\"version\":2,\"name\":\"x\",\"count\":1001}\n"),
+        std::string("{\"version\":2,\"name\":\"x\",\"count\":2}\n\"/a.mp3\"\n\"/a.mp3\"\n")}) {
+        legacyFiles.data["/.cardtunes/playlist-1.jsonl"] = broken;
+        assert(!migration.load(1, restored));
+    }
+    legacyFiles.data["/.cardtunes/playlist-1.jsonl"] = migrated;
+    assert(migration.load(1, restored)); assert(migration.erase(1));
 
     ct::Order order;
     const std::vector<uint32_t> ids{9, 3, 42, 1};

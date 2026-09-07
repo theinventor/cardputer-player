@@ -81,7 +81,8 @@ The existing `/api/input` route also accepts device keys. No credentials change.
 
 ## Saved Playlists
 
-Firmware **0.2.0** adds up to **16 named playlists with 128 unique songs each**.
+Firmware **0.3.1** supports **16 named playlists with 1,000 unique songs each**.
+The whole-library limit remains **10,000 songs**. Existing playlists remain readable.
 A song can belong to several playlists without duplicating its MP3 file.
 
 - **On the Cardputer:** press Tab to reach Playlists, select a list with `;` / `.`,
@@ -95,12 +96,17 @@ A song can belong to several playlists without duplicating its MP3 file.
 - **Shuffle and repeat** stay inside the active playlist. Repeat off ends at the
   last song; Repeat all loops this list; Repeat one repeats the current song.
   Explicitly playing a song from All music/the device's Library exits playlist mode.
-- **Persistence:** lists live at `/.cardtunes/playlist-N.json` on the microSD card.
+- **Persistence:** lists live at `/.cardtunes/playlist-N.jsonl` on the microSD card.
   Entries use absolute song paths, not changing library IDs. Names, membership,
   and order survive reboot, rescan, and normal firmware updates. The active list
   is remembered in NVS along with the existing paused track/position resume.
   Writes use a verified temporary file and a recoverable backup. Keep external
   backups too; this cannot protect against card failure or arbitrary FAT corruption.
+  Version 2 stores a JSON header line (`version`, `name`, `count`), followed by one
+  JSON-encoded absolute path per line. The player keeps offsets in RAM and reads
+  paths in 512-byte chunks, rather than allocating the entire playlist. Legacy
+  version-1 `.json` files migrate when edited; retain a backup before downgrading
+  firmware because older releases cannot read the new format.
 - **Missing songs:** unavailable paths remain visible in the browser and are
   skipped during playback. An empty/all-missing list cannot start; the current
   playback selection is left unchanged. Removing the currently playing entry
@@ -108,7 +114,7 @@ A song can belong to several playlists without duplicating its MP3 file.
 
 Names are 1-63 UTF-8 bytes, with no surrounding whitespace/control characters;
 duplicate names (ASCII case-insensitive) and duplicate entries are rejected.
-The serialized file is limited to 32 KiB. Standard M3U import/export is not included.
+The serialized file is limited to 400,000 bytes. Standard M3U import/export is not included.
 
 ### Temporary Queue
 
@@ -214,7 +220,10 @@ All routes require the existing `Authorization: Bearer DEVICE_ACCESS_KEY` header
 Status includes `active_playlist_id`, `playlist_name`, and `playlist_tracks`.
 Add `track=TRACK_ID` to the playlist control to start a particular member atomically,
 without briefly playing the first song. Out-of-scope tracks are rejected before switching.
-Playlist pages are capped at 32 entries. There is no new cloud service or credential.
+Playlist pages are capped at 16 entries to bound RAM use with long paths. Requests
+for the former 32-entry limit are accepted but return at most 16; follow
+`next_offset`. There is no new cloud service or credential. Status also reports
+`playlist_track_limit` and `library_track_limit`.
 
 USB serial accepts newline-delimited JSON commands, including `{"cmd":"status"}`
 and `{"cmd":"info"}`. **Info includes the access key**: never publish its output.
@@ -241,6 +250,23 @@ The firmware uses cJSON already supplied by ESP-IDF, with no new runtime depende
 Playlist tests cover persistence, write failures, backup recovery, validation,
 capacity limits, queue isolation, shuffle, repeat, and preserving saved order.
 Go tests cover authenticated playlist commands, pagination, errors, and validation.
+
+The 1,000-track tests cover long paths, edits at position 999, rejection of a
+1,001st entry, migration, reboot, and recovery without whole-file reads. For an
+explicit on-device capacity test, build `bash tools/build.sh -e cardputer-playlist-test`.
+This non-production image installs a disposable 1,000-entry playlist in unused
+slot 16 (999 missing long paths plus the flash demo); it never overwrites an
+occupied slot. Run `node test/large-playlist-device.mjs`, then install the normal
+`cardputer-adv` firmware and delete the fixture. Normal builds do not install it.
+
+### Bulk Transfer Timing
+
+A September 2026 test on the actual Cardputer uploaded a 4,717,484-byte MP3 in
+31.52 seconds, approximately **150 kB/s** including indexing. At that rate a
+1.98 GB collection takes about **3 hours 40 minutes**; allow **4-5 hours** for
+Wi-Fi variability and per-file overhead. This is a measured reference, not a
+guarantee. Use a microSD reader for a multi-gigabyte batch. Let downloads finish
+before copying, and safely eject the card before reinserting it into the player.
 
 Game tests use the actual firmware C/C++ cores, cover collisions, lives, line
 clears, merges, pause/exit/restart, save corruption/recovery, and fuzz 60,000
