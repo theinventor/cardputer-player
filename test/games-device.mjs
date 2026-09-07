@@ -32,7 +32,8 @@ try{
   await key('lock');await control('game-key','pause');await wait(100);assert.equal((await status()).game.paused,true,'Locked game cannot run');await key('lock');
   const savedScore=(await status()).game.score;
   await key('`');let closed=await until(s=>s.game.id==='none');assert.equal(closed.state,'paused');assert.equal(closed.game.save_error,'');
-  await control('game',id);assert.equal((await status()).game.score,savedScore);await control('game-exit');
+  // Resuming starts physics before the next HTTP status read can arrive.
+  await control('game',id);assert((await status()).game.score>=savedScore,'Resuming must not lose the saved score');await control('game-exit');
  }
  const library=await api('/api/library');const sd=library.tracks.filter(t=>t.path.startsWith('/Music/')).slice(0,2);assert.equal(sd.length,2);
  testList=(await api('/api/playlists',{action:'create',value:`Game QA ${Date.now()}`})).id;
