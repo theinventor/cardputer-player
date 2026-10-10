@@ -38,7 +38,9 @@ Music decoding stops and releases its buffers while Game Boy mode is active.
 On exit, a previously playing or paused track is reopened at its saved position,
 with its playlist, queue, and shuffle order retained. Games and music do not play
 simultaneously. Wi-Fi remains enabled; neither laptop Wi-Fi nor saved credentials
-are changed. Emulator speed and Wi-Fi responsiveness still need hardware testing.
+are changed. The ADV hardware smoke test measured roughly 59 game frames/second
+with a 1 MiB ROM cached in flash; the LCD is drawn at about 30 frames/second.
+Connected-Wi-Fi stress testing and longer gameplay acceptance remain outstanding.
 
 **Save using Pokemon's own in-game Save menu.** Cardtunes flushes cartridge SRAM
 to `pokemon-red.gb.sav` beside the ROM every 30 seconds when changed and on pause
@@ -74,6 +76,27 @@ and never overwrite existing files. Uploads/scans/music changes are rejected whi
 a game is open. `game`, `gameboy`, `game-key`, `gameboy-save`, and `game-exit` use
 the existing authenticated control endpoint. Status includes the title, frame
 counter, pause state, emulation error, and SD save error.
+
+USB installation and diagnostics do not require Wi-Fi. With Python and `pyserial`
+(also available in PlatformIO's Python environment):
+
+```sh
+python3 tools/usb.py --port /dev/cu.usbmodem1101 status
+python3 tools/usb.py rom '/path/to/your/Pokemon Red.gb'
+python3 tools/usb.py control game gameboy
+python3 tools/usb.py control game-key start
+python3 tools/usb.py control game-exit
+python3 tools/usb.py screen build/device.ppm
+```
+
+The USB installer validates the ROM header and size, checks an FNV-1a checksum
+after reading the entire file back from SD, and renames a temporary file only
+after verification. It never overwrites an existing ROM or save. Interrupted
+uploads time out after 30 seconds; rerun the command to retry from the beginning.
+Only one program may use the USB serial port at a time. The physical USB console
+has the same trusted-local access as the existing serial settings commands.
+`wifi-scan` diagnoses the Cardputer's 2.4 GHz reception without changing the host
+computer's network. Open networks are supported; captive-portal login is not.
 
 Run `bash test/gameboy.sh` for synthetic-ROM tests without Nintendo assets.
 To test a personal ROM locally, pass its filename as the sole argument. The
@@ -291,9 +314,18 @@ cd cli
 go build -o ../build/cardtunes ./cmd/cardtunes
 ```
 
-Adjust the serial port for your machine. The partition table reserves two 3 MB
-application slots and a LittleFS area; ordinary firmware updates preserve NVS
-settings and the filesystem. Do not use `firmware.factory.bin` for OTA.
+Adjust the serial port for your machine. Version 0.4 requires one USB flash to
+install the new partition table: two 2 MiB application slots, a 2 MiB Game Boy
+ROM cache, and the original LittleFS area at its unchanged address. NVS settings,
+LittleFS files, and the microSD card are preserved. Subsequent firmware updates
+can use OTA. Do not use `firmware.factory.bin` for OTA or downgrade the partition
+table over Wi-Fi.
+
+ROMs up to 1 MiB are copied to internal flash on first launch and memory-mapped
+for playback without SD ROM reads. SHA-256 verifies both the source and the
+cache, and the cache is only rewritten when content changes or verification fails.
+Larger ROMs use the slower SD paging fallback. Saves always remain on microSD.
+An interrupted cache build is rebuilt on the next launch; it never replaces saves.
 
 ## CLI
 

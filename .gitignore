@@ -12,3 +12,4 @@ include/web_page.h
 *.gba
 *.sav
 *.sav.*
+__pycache__/

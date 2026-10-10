@@ -54,7 +54,13 @@ void AudioPlayer::handle(const AudioCommand& command) {
     case AudioAction::Play:
         if (command.epoch != epoch_.load()) return;
         stopOutput(); file_.close();
-        if (!decoder_) decoder_.reset(new (std::nothrow) Decoder{});
+        if (!decoder_) {
+            decoder_.reset(new (std::nothrow) Decoder{});
+            if (decoder_) {
+                for (auto& pcm : decoder_->pcm) pcm.reset(new (std::nothrow) int16_t[MINIMP3_MAX_SAMPLES_PER_FRAME]{});
+                if (!decoder_->pcm[0] || !decoder_->pcm[1] || !decoder_->pcm[2]) decoder_.reset();
+            }
+        }
         if (!decoder_) {
             working_.playback = Playback::Error;
             copyText(working_.error, "Not enough memory for MP3 decoder"); break;
@@ -140,10 +146,10 @@ void AudioPlayer::task() {
         while (xQueueReceive(commands_, &command, 0) == pdTRUE) handle(command);
         if (working_.playback == Playback::Playing) {
             if (M5Cardputer.Speaker.isPlaying(0) < 2) {
-                int count = decoder_->stream.decode(decoder_->pcm[buffer_]);
+                int count = decoder_->stream.decode(decoder_->pcm[buffer_].get());
                 if (count > 0) {
-                    spectrum(decoder_->pcm[buffer_], count);
-                    M5Cardputer.Speaker.playRaw(decoder_->pcm[buffer_], count, decoder_->stream.rate(), decoder_->stream.channels() == 2, 1, 0);
+                    spectrum(decoder_->pcm[buffer_].get(), count);
+                    M5Cardputer.Speaker.playRaw(decoder_->pcm[buffer_].get(), count, decoder_->stream.rate(), decoder_->stream.channels() == 2, 1, 0);
                     buffer_ = (buffer_ + 1) % 3;
                     working_.positionMs = decoder_->stream.positionMs(); publish();
                 } else {

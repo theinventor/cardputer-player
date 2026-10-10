@@ -147,7 +147,12 @@ void Display::gameMenu() {
 }
 void Display::render() {
     if (app_.gameboy.active()) {
+        if (!app_.gameboy.paused()) {
+            canvas_.fillRect(0, 0, 45, 135, 0);
+            canvas_.fillRect(195, 0, 45, 135, 0);
+        }
         if (app_.gameboy.paused()) {
+            gbFullDraw_ = true;
             canvas_.fillRect(0, 0, 240, 135, Background);
             text("GAME BOY PAUSED", 8, 10, 224, Accent);
             text(app_.gameboy.title().c_str(), 8, 31, 224);
@@ -157,7 +162,11 @@ void Display::render() {
             String error = app_.gameboy.error().empty() ? app_.gameboy.saveError().c_str() : app_.gameboy.error().c_str();
             text(error, 8, 110, 224, Pink);
         }
-        canvas_.pushSprite(0, 0); lastDraw_ = millis(); return;
+        if (!app_.gameboy.paused() && !gbFullDraw_) M5.Display.setClipRect(45, 0, 150, 135);
+        canvas_.pushSprite(0, 0);
+        M5.Display.clearClipRect();
+        if (!app_.gameboy.paused()) gbFullDraw_ = false;
+        lastDraw_ = millis(); return;
     }
     if (app_.games.active() != GameId::None) {
         canvas_.setFont(&fonts::Font0); canvas_.setTextSize(1);
@@ -302,7 +311,8 @@ void Display::tick() {
     if (app_.gameboy.active() != lastGameBoy_) {
         lastGameBoy_ = app_.gameboy.active(); clicks_ = 0; lastInput_ = millis();
         if (lastGameBoy_) {
-            canvas_.fillSprite(Background); gbFrame_ = 0; gbMenu_ = 0;
+            if (!locked_) { sleeping_ = false; M5.Display.setBrightness(app_.settings.brightness); }
+            canvas_.fillSprite(Background); gbFrame_ = 0; gbMenu_ = 0; gbFullDraw_ = true;
             app_.gameboy.display(gameBoyLine, this);
             editing_ = 0; searching_ = pairing_ = false;
         } else { view_ = 0; coverTrack_ = -2; render(); }

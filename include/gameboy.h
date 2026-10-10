@@ -12,10 +12,10 @@ public:
     using DrawLine = void (*)(void*, const uint8_t*, unsigned);
     GameBoy();
     ~GameBoy();
-    bool open(PlaylistFiles& files, const std::string& path);
+    bool open(PlaylistFiles& files, const std::string& path, const uint8_t* mappedRom = nullptr);
     void close();
     bool active() const;
-    bool step(unsigned instructions = 4096);
+    bool step(unsigned instructions = 16384);
     void buttons(uint8_t pressed);
     void sound(int16_t* samples);
     void display(DrawLine draw, void* context);
@@ -23,6 +23,7 @@ public:
     bool paused() const { return paused_; }
     void pause(bool value) { paused_ = value; }
     uint32_t frames() const;
+    uint32_t cacheMisses() const;
     const std::string& error() const { return error_; }
     const std::string& saveError() const { return saveError_; }
     const std::string& title() const { return title_; }

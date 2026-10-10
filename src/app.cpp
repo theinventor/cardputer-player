@@ -1,4 +1,5 @@
 #include "app.h"
+#include "display.h"
 #include <ESPmDNS.h>
 #include <esp_system.h>
 #include <map>
@@ -73,6 +74,7 @@ bool App::play(int id, uint32_t position, bool paused, int entry) {
     return true;
 }
 bool App::control(const String& action, const String& value, String& error) {
+    if (usbRom.active()) { error = "USB ROM upload in progress"; return false; }
     if (action == "cancel-scan") {
         library.cancelScan(); notice = library.scanError().c_str(); return true;
     }
@@ -347,6 +349,7 @@ void App::saveResume() {
     lastSave_ = millis();
 }
 void App::configureWifi(const String& ssid, const String& password) {
+    WiFi.disconnect(false, false);
     settings.ssid = ssid; settings.password = password; settings.wifi = true;
     saveSettings(); connectWifi();
 }
@@ -383,6 +386,11 @@ cJSON* App::status() {
     cJSON_AddStringToObject(game, "save_error", gameboy.active() ? gameboy.saveError().c_str() : gameStore.error().c_str());
     cJSON_AddStringToObject(game, "error", gameboy.error().c_str());
     cJSON_AddNumberToObject(game, "frames", gameboy.frames());
+    cJSON_AddNumberToObject(game, "cache_misses", gameboy.cacheMisses());
+    cJSON_AddStringToObject(game, "rom_source", flashRom.data() ? "flash" : "sd");
+    cJSON_AddNumberToObject(game, "core_us", gbCoreUs_);
+    cJSON_AddNumberToObject(game, "audio_us", gbAudioUs_);
+    cJSON_AddNumberToObject(game, "audio_underruns", gbUnderruns_);
     cJSON_AddStringToObject(object, "state", playbackName(s.playback));
     auto track = trackJson(s.track);
     if (!track || !cJSON_AddItemToObject(object, "track", track)) { cJSON_Delete(track); cJSON_Delete(object); return nullptr; }
@@ -417,6 +425,8 @@ cJSON* App::status() {
     cJSON_AddStringToObject(object, "ip", WiFi.localIP().toString().c_str());
     cJSON_AddStringToObject(object, "ssid", WiFi.SSID().c_str());
     cJSON_AddNumberToObject(object, "rssi", WiFi.isConnected() ? WiFi.RSSI() : 0);
+    cJSON_AddNumberToObject(object, "wifi_status", WiFi.status());
+    cJSON_AddStringToObject(object, "configured_ssid", settings.ssid.c_str());
     cJSON_AddNumberToObject(object, "loading_percent", s.loadingPercent);
     cJSON_AddNumberToObject(object, "keyboard_keys", M5Cardputer.Keyboard.isPressed());
     cJSON_AddNumberToObject(object, "keyboard_events", keyboardEvents);
@@ -446,6 +456,62 @@ void App::serial() {
             else if (cmd == "wifi" && !field("ssid").isEmpty() && field("ssid").length() <= 32 && field("password").length() <= 63) {
                 configureWifi(field("ssid"), field("password")); Serial.println("{\"ok\":true}");
             } else if (cmd == "status") jsonPrint(status());
+            else if (cmd.startsWith("rom-")) {
+                bool ok = false; String error;
+                uint32_t size = 0, hash = 0, offset = 0;
+                if (cmd == "rom-abort") { usbRom.abort(); ok = true; }
+                else if (cmd == "rom-begin") {
+                    if (gameActive() || library.scanning() || usbRom.active()) error = "Device busy";
+                    else if (!parseNumber(field("size"), GameBoy::MaxRomBytes, size) || !parseNumber(field("hash"), UINT32_MAX, hash)) error = "Invalid size or hash";
+                    else {
+                        bool wasPlaying = false;
+                        if (!audio.pauseAndWait(&wasPlaying)) error = "Audio busy";
+                        else {
+                            saveResume();
+                            { SDLock lock(sdMutex); SD.mkdir("/Games"); }
+                            ok = usbRom.begin(field("path").c_str(), size, hash);
+                            if (!ok && wasPlaying) {
+                                AudioCommand resume; resume.action = AudioAction::Resume;
+                                audio.send(resume);
+                            }
+                        }
+                    }
+                } else if (cmd == "rom-data" && parseNumber(field("offset"), GameBoy::MaxRomBytes, offset)) ok = usbRom.chunk(offset, field("data").c_str());
+                else if (cmd == "rom-finish") ok = usbRom.finish();
+                else error = "Invalid USB upload command";
+                usbRomAt_ = millis();
+                auto response = cJSON_CreateObject(); cJSON_AddBoolToObject(response, "ok", ok);
+                cJSON_AddNumberToObject(response, "received", usbRom.received());
+                cJSON_AddStringToObject(response, "error", ok ? "" : error.isEmpty() ? usbRom.error().c_str() : error.c_str());
+                jsonPrint(response);
+            } else if (cmd == "screen-row" && display_) {
+                uint32_t row;
+                if (parseNumber(field("row"), 134, row)) {
+                    if (!row) display_->render();
+                    char hex[481]; const char* digits = "0123456789abcdef";
+                    for (unsigned x = 0; x < 240; ++x) {
+                        auto c = display_->canvas().readPixelRGB(x, row);
+                        uint8_t pixel = (c.R8() & 0xe0) | ((c.G8() >> 3) & 0x1c) | (c.B8() >> 6);
+                        hex[x * 2] = digits[pixel >> 4]; hex[x * 2 + 1] = digits[pixel & 15];
+                    }
+                    hex[480] = 0;
+                    auto response = cJSON_CreateObject(); cJSON_AddNumberToObject(response, "row", row);
+                    cJSON_AddStringToObject(response, "pixels", hex); jsonPrint(response);
+                } else Serial.println("{\"ok\":false,\"error\":\"Invalid row\"}");
+            } else if (cmd == "input" && display_ && !usbRom.active()) {
+                display_->key(field("value")); Serial.println("{\"ok\":true}");
+            } else if (cmd == "wifi-scan" && !gameActive() && !usbRom.active()) {
+                WiFi.disconnect(false, false);
+                int count = WiFi.scanNetworks(false, true);
+                auto response = cJSON_CreateObject(); auto networks = cJSON_AddArrayToObject(response, "networks");
+                for (int i = 0; i < count && i < 20; ++i) {
+                    auto network = cJSON_CreateObject(); cJSON_AddStringToObject(network, "ssid", WiFi.SSID(i).c_str());
+                    cJSON_AddNumberToObject(network, "rssi", WiFi.RSSI(i)); cJSON_AddNumberToObject(network, "auth", WiFi.encryptionType(i));
+                    cJSON_AddItemToArray(networks, network);
+                }
+                cJSON_AddNumberToObject(response, "result", count); jsonPrint(response);
+                WiFi.scanDelete(); connectWifi();
+            }
             else {
                 String error;
                 bool ok = control(cmd, field("value"), error);
@@ -453,13 +519,14 @@ void App::serial() {
             }
             cJSON_Delete(json);
         } else if (c != '\r') {
-            if (serialLine_.length() < 512) serialLine_ += c;
+            if (serialLine_.length() < 1536) serialLine_ += c;
             else serialLine_ = "";
         }
     }
 }
 void App::tick() {
     uint32_t now = millis();
+    if (usbRom.active() && now - usbRomAt_ > 30000) usbRom.abort();
     if (library.scanning()) {
         library.scanStep();
         if (!library.scanning()) {
@@ -485,14 +552,21 @@ void App::tick() {
     if (gameboy.active()) {
         uint8_t pulse = int32_t(millis() - gbPulseUntil_) < 0 ? gbPulse_ : 0;
         gameboy.buttons(gbHeld_ | pulse);
-        if (!gameboy.paused() && int32_t(micros() - gbFrameAt_) >= 0 && gameboy.step()) {
-            gameboy.sound(gbAudio_->pcm[gbBuffer_]);
-            if (M5Cardputer.Speaker.isPlaying(0) < 2) {
-                M5Cardputer.Speaker.playRaw(gbAudio_->pcm[gbBuffer_], GameBoy::Samples, GameBoy::SampleRate, true, 1, 0);
+        bool complete = false;
+        // Let the speaker consumption pace emulation, keeping two frames queued.
+        if (!gameboy.paused() && (gbAudioFill_ || M5Cardputer.Speaker.isPlaying(0) < 2)) {
+            uint32_t at = micros(); complete = gameboy.step(); gbCoreUs_ += micros() - at;
+        }
+        if (complete) {
+            uint32_t at = micros();
+            gameboy.sound(gbAudio_->pcm[gbBuffer_] + gbAudioFill_ * GameBoy::Samples);
+            gbAudioUs_ += micros() - at;
+            if (++gbAudioFill_ == 2) {
+                if (!M5Cardputer.Speaker.isPlaying(0)) ++gbUnderruns_;
+                M5Cardputer.Speaker.playRaw(gbAudio_->pcm[gbBuffer_], GameBoy::Samples * 2, GameBoy::SampleRate, true, 1, 0);
                 gbBuffer_ = (gbBuffer_ + 1) % 3;
+                gbAudioFill_ = 0;
             }
-            gbFrameAt_ += 16743;
-            if (int32_t(micros() - gbFrameAt_) > 16743) gbFrameAt_ = micros();
         }
         if (millis() - lastGameSave_ >= 30000) { gameboy.save(); lastGameSave_ = millis(); }
     }
@@ -524,7 +598,7 @@ bool App::exitGame(String& error) {
     if (gameboy.active()) {
         pauseGameBoy(true);
         if (!gameboy.save()) { error = gameboy.saveError().c_str(); return false; }
-        gameboy.close(); gbAudio_.reset();
+        gameboy.close(); flashRom.reset(); gbAudio_.reset();
         if (gbResume_.track >= 0 && gbResume_.playback == Playback::Paused) {
             if (!play(gbResume_.track, gbResume_.positionMs, !resumeAfterGame_, order.currentPosition())) {
                 error = "Game closed; music restore failed"; notice = error; return false;
@@ -553,15 +627,17 @@ bool App::startGameBoy(const String& path, String& error) {
     if (!audio.pauseAndWait(&resumeAfterGame_)) { error = "Player is busy"; return false; }
     gbResume_ = audio.state(); saveResume();
     if (!audio.releaseAndWait()) { error = "Could not release MP3 decoder"; return false; }
+    flashRom.prepare(playlistFiles, path.c_str());
     gbAudio_.reset(new (std::nothrow) GameBoyAudio{});
-    if (!gbAudio_ || !gameboy.open(playlistFiles, path.c_str())) {
+    if (!gbAudio_ || !gameboy.open(playlistFiles, path.c_str(), flashRom.data())) {
         error = gbAudio_ ? gameboy.error().c_str() : "Not enough memory for Game Boy audio";
-        gbAudio_.reset();
+        gbAudio_.reset(); flashRom.reset();
         if (gbResume_.track >= 0 && gbResume_.playback == Playback::Paused) play(gbResume_.track, gbResume_.positionMs, !resumeAfterGame_, order.currentPosition());
         return false;
     }
-    gbHeld_ = gbPulse_ = gbBuffer_ = 0; gbPulseUntil_ = millis(); gbFrameAt_ = micros(); lastGameSave_ = millis();
-    notice = ""; return true;
+    gbHeld_ = gbPulse_ = gbBuffer_ = gbAudioFill_ = 0; gbPulseUntil_ = millis(); lastGameSave_ = millis();
+    gbCoreUs_ = gbAudioUs_ = gbUnderruns_ = 0;
+    notice = flashRom.data() ? "" : flashRom.error().c_str(); return true;
 }
 void App::pauseGameBoy(bool paused) {
     if (!gameboy.active()) return;
@@ -571,8 +647,9 @@ void App::pauseGameBoy(bool paused) {
         M5Cardputer.Speaker.stop(0);
         while (M5Cardputer.Speaker.isPlaying(0)) delay(1);
         gbHeld_ = gbPulse_ = 0;
+        gbAudioFill_ = 0;
         gameboy.save();
-    } else gbFrameAt_ = micros();
+    }
 }
 void App::gameBoyKey(const String& key) {
     if (!gameboy.active()) return;

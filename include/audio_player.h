@@ -49,7 +49,7 @@ private:
     SDReader file_;
     struct Decoder {
         Mp3Stream stream;
-        int16_t pcm[3][MINIMP3_MAX_SAMPLES_PER_FRAME]{};
+        std::array<std::unique_ptr<int16_t[]>, 3> pcm;
     };
     std::unique_ptr<Decoder> decoder_;
     std::atomic<uint32_t> epoch_{0};

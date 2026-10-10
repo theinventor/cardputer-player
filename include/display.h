@@ -20,6 +20,7 @@ private:
     int gameSelected_ = 0;
     GameId lastGame_ = GameId::None;
     bool lastGameBoy_ = false;
+    bool gbFullDraw_ = true;
     uint32_t gbFrame_ = 0;
     int gbMenu_ = 0;
     static void gameBoyLine(void* context, const uint8_t* pixels, unsigned line);

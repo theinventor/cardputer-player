@@ -27,6 +27,7 @@ void setup() {
     installLargePlaylistFixture(app);
 #endif
     screen.begin();
+    app.attachDisplay(screen);
     web.begin();
 }
 

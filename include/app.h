@@ -3,12 +3,15 @@
 #include "order.h"
 #include "games.h"
 #include "gameboy.h"
+#include "rom_upload.h"
+#include "flash_rom.h"
 #include <M5Cardputer.h>
 #include <Preferences.h>
 #include <WiFi.h>
 #include <cJSON.h>
 
 namespace ct {
+class Display;
 struct Settings {
     String ssid, password, token;
     bool wifi = false, visualizer = true;
@@ -22,6 +25,8 @@ public:
     Playlists playlists{playlistFiles};
     Games games;
     GameBoy gameboy;
+    FlashRom flashRom;
+    RomUpload usbRom{playlistFiles};
     GameStore gameStore{playlistFiles};
     AudioPlayer audio;
     Order order;
@@ -59,17 +64,21 @@ public:
     void invalidatePlaylistCache() { cachedPlaylist_ = 0; cachedIds_.clear(); }
     bool musicUploaded();
     static void jsonPrint(cJSON* json);
+    void attachDisplay(Display& display) { display_ = &display; }
 private:
+    Display* display_ = nullptr;
+    uint32_t usbRomAt_ = 0;
     uint32_t lastSave_ = 0, handledEnd_ = 0, lastWifiAttempt_ = 0, lastTick_ = 0;
     Playback lastPlayback_ = Playback::Stopped;
     bool wasConnected_ = false;
     bool resumeAfterGame_ = false;
     uint32_t lastGameSave_ = 0;
     AudioState gbResume_;
-    struct GameBoyAudio { int16_t pcm[3][GameBoy::Samples]{}; };
+    struct GameBoyAudio { int16_t pcm[3][GameBoy::Samples * 2]{}; };
     std::unique_ptr<GameBoyAudio> gbAudio_;
-    uint32_t gbFrameAt_ = 0, gbPulseUntil_ = 0;
-    uint8_t gbHeld_ = 0, gbPulse_ = 0, gbBuffer_ = 0;
+    uint32_t gbPulseUntil_ = 0;
+    uint32_t gbCoreUs_ = 0, gbAudioUs_ = 0, gbUnderruns_ = 0;
+    uint8_t gbHeld_ = 0, gbPulse_ = 0, gbBuffer_ = 0, gbAudioFill_ = 0;
     String serialLine_;
     uint32_t cachedPlaylist_ = 0, cachedAt_ = 0;
     std::vector<uint32_t> cachedIds_;

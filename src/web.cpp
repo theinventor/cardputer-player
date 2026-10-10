@@ -132,9 +132,10 @@ void Web::uploadChunk(bool firmware, bool playlist, bool rom) {
         playlistUpload_ = playlist; romUpload_ = rom; importId_ = 0;
         uploadTemp_ = playlist ? "/.cardtunes/playlist-import.tmp" : rom ? "/Games/.upload.part" : "/Music/.upload.part";
         if (!authorized()) { uploadStatus_ = 401; uploadError_ = "Access key required"; return; }
+        if (app_.usbRom.active()) { uploadStatus_ = 409; uploadError_ = "USB ROM upload in progress"; return; }
         if (app_.library.scanning()) { uploadStatus_ = 409; uploadError_ = "Cancel the music scan before uploading"; return; }
         if (app_.gameActive()) { uploadStatus_ = 409; uploadError_ = "Exit the game before uploading"; return; }
-        if (!parseNumber(server_.arg("size"), firmware ? 0x300000 : playlist ? Playlists::MaxBytes : rom ? GameBoy::MaxRomBytes : 256 * 1024 * 1024, expected_) || !expected_) { uploadError_ = "A valid size query parameter is required"; return; }
+        if (!parseNumber(server_.arg("size"), firmware ? 0x200000 : playlist ? Playlists::MaxBytes : rom ? GameBoy::MaxRomBytes : 256 * 1024 * 1024, expected_) || !expected_) { uploadError_ = "A valid size query parameter is required"; return; }
         if (!firmware && !app_.library.mounted()) { uploadStatus_ = 503; uploadError_ = "Insert a microSD card and rescan before uploading music"; return; }
         if (playlist) {
             if (server_.hasArg("id") && !parseNumber(server_.arg("id"), Playlists::MaxLists, importId_)) { uploadError_ = "Invalid playlist ID"; return; }

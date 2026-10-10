@@ -1,4 +1,5 @@
 #include "gameboy.h"
+#include "rom_upload.h"
 #include <cassert>
 #include <cstring>
 #include <fstream>
@@ -58,8 +59,13 @@ static std::string fixture() {
     memcpy(rom.data() + 0x134, "CARDTUNES TEST", 14);
     rom[0x147] = 0x13; rom[0x148] = 1; rom[0x149] = 3;
     // Enable SRAM, write one byte, then exercise banked ROM fetches in a loop.
-    const uint8_t code[] = {0x3e,0x0a,0xea,0x00,0x00,0x3e,0x42,0xea,0x00,0xa0,0xc3,0x00,0x40};
-    memcpy(rom.data() + 0x150, code, sizeof(code));
+    std::vector<uint8_t> code = {0x3e,0x0a,0xea,0x00,0x00};
+    for (uint8_t bank = 0; bank < 4; ++bank) {
+        const uint8_t writes[] = {0x3e,bank,0xea,0x00,0x40,0x3e,uint8_t(0x42 + bank),0xea,0x00,0xa0,0xea,0xff,0xbf};
+        code.insert(code.end(), std::begin(writes), std::end(writes));
+    }
+    code.insert(code.end(), {0xc3,0x00,0x40});
+    memcpy(rom.data() + 0x150, code.data(), code.size());
     rom[0x4000] = char(0xc3); rom[0x4001] = 0; rom[0x4002] = 0x40;
     checksum(rom); return rom;
 }
@@ -70,6 +76,37 @@ static void run(ct::GameBoy& gb, unsigned frames) {
     assert(gb.error().empty()); assert(gb.frames() == target);
 }
 int main(int argc, char** argv) {
+    {
+        Files disk; ct::RomUpload upload(disk); auto rom = fixture();
+        auto hash = ct::RomUpload::hash(2166136261u, reinterpret_cast<const uint8_t*>(rom.data()), rom.size());
+        assert(!upload.begin("/Music/red.gb", rom.size(), hash));
+        assert(upload.begin("/Games/usb.gb", rom.size(), hash));
+        assert(!upload.finish()); assert(!upload.chunk(1, "00"));
+        assert(!upload.chunk(0, "zz") && upload.received() == 0);
+        auto transfer = [&] {
+            for (size_t at = 0; at < rom.size(); at += 512) {
+                std::string hex; const char* digits = "0123456789abcdef";
+                for (size_t i = at; i < at + 512; ++i) { uint8_t c = rom[i]; hex += digits[c >> 4]; hex += digits[c & 15]; }
+                assert(upload.chunk(at, hex));
+            }
+        };
+        transfer();
+        assert(upload.finish() && disk.data["/Games/usb.gb"] == rom);
+        assert(!upload.begin("/Games/usb.gb", rom.size(), hash));
+        assert(upload.begin("/Games/bad.gb", rom.size(), hash));
+        assert(upload.chunk(0, "00")); upload.abort(); assert(!upload.active());
+        assert(!disk.exists("/Games/bad.gb") && !disk.exists("/Games/.usb-upload.tmp"));
+        assert(upload.begin("/Games/bad.gb", rom.size(), hash ^ 1)); transfer();
+        assert(!upload.finish() && !disk.exists("/Games/bad.gb"));
+        assert(upload.begin("/Games/bad.gb", rom.size(), hash));
+        disk.corrupt = true; transfer(); disk.corrupt = false;
+        assert(!upload.finish() && !disk.exists("/Games/bad.gb"));
+        assert(upload.begin("/Games/bad.gb", rom.size(), hash));
+        disk.failWrite = true; assert(!upload.chunk(0, "00") && !upload.active()); disk.failWrite = false;
+        assert(upload.begin("/Games/bad.gb", rom.size(), hash)); transfer();
+        disk.failRename = true; assert(!upload.finish() && !disk.exists("/Games/bad.gb")); disk.failRename = false;
+        assert(disk.data["/Games/usb.gb"] == rom);
+    }
     std::vector<uint8_t> screen(240 * 135, 0x55);
     uint8_t row[160]{};
     for (unsigned line = 0; line <= 144; ++line) ct::gameBoyRenderLine(screen.data(), row, line);
@@ -84,6 +121,10 @@ int main(int argc, char** argv) {
     assert(ct::gameBoyButton("enter") == 8 && ct::gameBoyButton("z") == 1);
     assert(gb.open(files, path)); run(gb, 4); assert(gb.save());
     assert(files.data[save].size() == 32768 && files.data[save][0] == 0x42);
+    for (unsigned bank = 0; bank < 4; ++bank) {
+        assert(files.data[save][bank * 8192] == 0x42 + bank);
+        assert(files.data[save][bank * 8192 + 8191] == 0x42 + bank);
+    }
     gb.pause(true); auto before = gb.frames(); assert(!gb.step() && gb.frames() == before);
     gb.close();
     files.data[save][0] = 1;
@@ -107,6 +148,9 @@ int main(int argc, char** argv) {
     files.data[path] = fixture(); assert(gb.open(files, path)); files.failRead = true;
     for (unsigned i = 0; i < 100 && gb.error().empty(); ++i) gb.step();
     assert(!gb.error().empty()); gb.close(); files.failRead = false;
+    assert(gb.open(files, path, reinterpret_cast<const uint8_t*>(files.data[path].data())));
+    files.failRead = true; run(gb, 10); assert(gb.cacheMisses() == 0);
+    files.failRead = false; assert(gb.save()); gb.close();
     if (argc > 1) {
         std::ifstream input(argv[1], std::ios::binary); assert(input);
         files.data[path] = std::string(std::istreambuf_iterator<char>(input), {});
