@@ -1,6 +1,7 @@
 #include "audio_player.h"
 #include <M5Cardputer.h>
 #include <cmath>
+#include <new>
 
 namespace ct {
 const char* playbackName(Playback value) {
@@ -17,7 +18,6 @@ bool AudioPlayer::begin(uint8_t volume) {
     working_.volume = std::min<uint8_t>(volume, 100);
     M5Cardputer.Speaker.setVolume(working_.volume * 255 / 100);
     if (!M5Cardputer.Speaker.begin()) return false;
-    stream_.keepGoing = keepGoing; stream_.context = this;
     commands_ = xQueueCreate(8, sizeof(AudioCommand));
     publish();
     // Decoder/seek high-water use is about 18 KB on the Adv; keep 6 KB margin.
@@ -36,7 +36,7 @@ bool AudioPlayer::keepGoing(void* context) {
     if (self->working_.epoch != self->epoch_.load()) return false;
     if (millis() - self->lastProgress_ >= 50) {
         self->lastProgress_ = millis();
-        self->working_.loadingPercent = self->stream_.indexingProgress() * 100;
+        self->working_.loadingPercent = self->decoder_->stream.indexingProgress() * 100;
         self->publish(); delay(1);
     }
     return true;
@@ -54,19 +54,25 @@ void AudioPlayer::handle(const AudioCommand& command) {
     case AudioAction::Play:
         if (command.epoch != epoch_.load()) return;
         stopOutput(); file_.close();
+        if (!decoder_) decoder_.reset(new (std::nothrow) Decoder{});
+        if (!decoder_) {
+            working_.playback = Playback::Error;
+            copyText(working_.error, "Not enough memory for MP3 decoder"); break;
+        }
+        decoder_->stream.keepGoing = keepGoing; decoder_->stream.context = this;
         working_.track = command.track; working_.epoch = command.epoch;
         working_.playback = Playback::Loading; working_.error[0] = 0;
         working_.positionMs = working_.durationMs = working_.loadingPercent = 0;
         publish();
-        if (!file_.open(command.path) || !stream_.open(file_)) {
+        if (!file_.open(command.path) || !decoder_->stream.open(file_)) {
             working_.playback = Playback::Error;
-            copyText(working_.error, stream_.error().empty() ? "Cannot open MP3" : stream_.error());
+            copyText(working_.error, decoder_->stream.error().empty() ? "Cannot open MP3" : decoder_->stream.error());
             file_.close(); break;
         }
-        working_.rate = stream_.rate(); working_.channels = stream_.channels();
-        working_.durationMs = stream_.durationMs();
-        if (command.value) stream_.seekMs(command.value);
-        working_.positionMs = stream_.positionMs();
+        working_.rate = decoder_->stream.rate(); working_.channels = decoder_->stream.channels();
+        working_.durationMs = decoder_->stream.durationMs();
+        if (command.value) decoder_->stream.seekMs(command.value);
+        working_.positionMs = decoder_->stream.positionMs();
         working_.playback = command.paused ? Playback::Paused : Playback::Playing;
         break;
     case AudioAction::Stop:
@@ -80,13 +86,13 @@ void AudioPlayer::handle(const AudioCommand& command) {
         if (command.action != AudioAction::Toggle) break;
         [[fallthrough]];
     case AudioAction::Resume:
-        if (working_.playback == Playback::Paused) working_.playback = Playback::Playing;
+        if (decoder_ && working_.playback == Playback::Paused) working_.playback = Playback::Playing;
         break;
     case AudioAction::Seek:
-        if (working_.playback == Playback::Playing || working_.playback == Playback::Paused || working_.playback == Playback::Ended) {
+        if (decoder_ && (working_.playback == Playback::Playing || working_.playback == Playback::Paused || working_.playback == Playback::Ended)) {
             stopOutput();
-            if (stream_.seekMs(command.value)) {
-                working_.positionMs = stream_.positionMs();
+            if (decoder_->stream.seekMs(command.value)) {
+                working_.positionMs = decoder_->stream.positionMs();
                 if (working_.playback == Playback::Ended) working_.playback = Playback::Paused;
             }
         }
@@ -94,8 +100,13 @@ void AudioPlayer::handle(const AudioCommand& command) {
     case AudioAction::Volume:
         working_.volume = std::min<uint32_t>(command.value, 100);
         speaker.setVolume(working_.volume * 255 / 100); break;
+    case AudioAction::Release:
+        stopOutput(); file_.close(); decoder_.reset();
+        working_.playback = Playback::Stopped;
+        break;
     }
     publish();
+    if (command.action == AudioAction::Release) released_.store(true);
     if (command.action == AudioAction::Pause && command.value) {
         pauseWasPlaying_.store(wasPlaying);
         pauseDone_.store(command.value);
@@ -129,16 +140,16 @@ void AudioPlayer::task() {
         while (xQueueReceive(commands_, &command, 0) == pdTRUE) handle(command);
         if (working_.playback == Playback::Playing) {
             if (M5Cardputer.Speaker.isPlaying(0) < 2) {
-                int count = stream_.decode(pcm_[buffer_]);
+                int count = decoder_->stream.decode(decoder_->pcm[buffer_]);
                 if (count > 0) {
-                    spectrum(pcm_[buffer_], count);
-                    M5Cardputer.Speaker.playRaw(pcm_[buffer_], count, stream_.rate(), stream_.channels() == 2, 1, 0);
+                    spectrum(decoder_->pcm[buffer_], count);
+                    M5Cardputer.Speaker.playRaw(decoder_->pcm[buffer_], count, decoder_->stream.rate(), decoder_->stream.channels() == 2, 1, 0);
                     buffer_ = (buffer_ + 1) % 3;
-                    working_.positionMs = stream_.positionMs(); publish();
+                    working_.positionMs = decoder_->stream.positionMs(); publish();
                 } else {
                     while (M5Cardputer.Speaker.isPlaying(0) && uxQueueMessagesWaiting(commands_) == 0) delay(1);
-                    working_.playback = stream_.error().empty() ? Playback::Ended : Playback::Error;
-                    copyText(working_.error, stream_.error()); publish();
+                    working_.playback = decoder_->stream.error().empty() ? Playback::Ended : Playback::Error;
+                    copyText(working_.error, decoder_->stream.error()); publish();
                 }
             }
         }
@@ -166,6 +177,16 @@ bool AudioPlayer::stopAndWait() {
     for (unsigned i = 0; i < 2000; ++i) {
         auto s = state();
         if (s.epoch == desired && s.playback == Playback::Stopped) return true;
+        delay(1);
+    }
+    return false;
+}
+bool AudioPlayer::releaseAndWait() {
+    released_.store(false);
+    AudioCommand command; command.action = AudioAction::Release;
+    if (!send(command)) return false;
+    for (unsigned i = 0; i < 2000; ++i) {
+        if (released_.load()) return true;
         delay(1);
     }
     return false;

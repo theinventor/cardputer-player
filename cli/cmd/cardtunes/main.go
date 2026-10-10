@@ -420,9 +420,12 @@ playlist play ID|all        Play only this playlist, or all music
 play-library ID             Play a library track and leave playlist mode
 clear-queue | rescan        Clear queue or start a background microSD scan
 cancel-scan                Cancel a scan; status reports scan progress
-game blocks|breakout|2048    Open a game (pauses music)
-game-key KEY               Game input: left/right/up/down/primary/pause
+game blocks|breakout|2048|gameboy  Open a game (pauses music)
+gameboy [/Games/NAME.gb]    Open a Game Boy ROM (default: pokemon-red.gb)
+game-key KEY               Game input; GB also accepts z/x/start/select
+gameboy-save               Flush cartridge SRAM to the microSD card
 game-exit                  Save game and return to music
+rom FILE.gb [/Games/NAME.gb] Upload a ROM without overwriting existing files
 upload FILE_OR_FOLDER...    Upload MP3s, retaining album folders
 screen FILE.bmp             Capture the actual device display
 key KEY                     Send a device key (tab, enter, [, ], n, etc.)
@@ -537,6 +540,19 @@ func run(args []string) error {
 			}
 		}
 		return nil
+	case "rom":
+		if len(args) < 1 || len(args) > 2 {
+			return errors.New("usage: cardtunes rom FILE.gb [/Games/NAME.gb]")
+		}
+		destination := "/Games/pokemon-red.gb"
+		if len(args) == 2 {
+			destination = args[1]
+		}
+		data, err := c.uploadFile(args[0], "/api/rom", url.Values{"path": {destination}}, 2<<20)
+		if err != nil {
+			return err
+		}
+		return output(data)
 	case "firmware":
 		if len(args) != 1 {
 			return errors.New("usage: cardtunes firmware FILE.bin")
@@ -631,7 +647,7 @@ func run(args []string) error {
 		command = "enqueue"
 	}
 	switch command {
-	case "play", "play-entry", "play-library", "pause", "toggle", "stop", "next", "previous", "seek", "volume", "shuffle", "repeat", "enqueue", "clear-queue", "rescan", "cancel-scan", "game", "game-key", "game-exit":
+	case "play", "play-entry", "play-library", "pause", "toggle", "stop", "next", "previous", "seek", "volume", "shuffle", "repeat", "enqueue", "clear-queue", "rescan", "cancel-scan", "game", "game-key", "game-exit", "gameboy", "gameboy-save":
 		data, err := c.control(command, value)
 		if err != nil {
 			return err

@@ -16,7 +16,7 @@ struct AudioState {
     uint8_t bands[16]{};
     char error[96]{};
 };
-enum class AudioAction { Play, Pause, Resume, Toggle, Seek, Stop, Volume };
+enum class AudioAction { Play, Pause, Resume, Toggle, Seek, Stop, Volume, Release };
 struct AudioCommand {
     AudioAction action = AudioAction::Stop;
     int track = -1;
@@ -32,6 +32,7 @@ public:
     uint32_t stackFree() const { return worker_ ? uxTaskGetStackHighWaterMark(worker_) : 0; }
     bool pauseAndWait(bool* wasPlaying = nullptr);
     bool stopAndWait();
+    bool releaseAndWait();
     void visualizer(bool enabled) { visualize_.store(enabled); }
 private:
     static void run(void* context);
@@ -46,14 +47,18 @@ private:
     QueueHandle_t commands_ = nullptr;
     TaskHandle_t worker_ = nullptr;
     SDReader file_;
-    Mp3Stream stream_;
+    struct Decoder {
+        Mp3Stream stream;
+        int16_t pcm[3][MINIMP3_MAX_SAMPLES_PER_FRAME]{};
+    };
+    std::unique_ptr<Decoder> decoder_;
     std::atomic<uint32_t> epoch_{0};
     std::atomic<bool> visualize_{true};
     std::atomic<uint32_t> pauseDone_{0};
     std::atomic<bool> pauseWasPlaying_{false};
+    std::atomic<bool> released_{false};
     uint32_t pauseRequest_ = 0;
     uint32_t lastProgress_ = 0, lastSpectrum_ = 0;
-    int16_t pcm_[3][MINIMP3_MAX_SAMPLES_PER_FRAME]{};
     unsigned buffer_ = 0;
 };
 }

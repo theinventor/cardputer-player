@@ -28,3 +28,4 @@ build/order-occurrences-test
   test/storage_test.cpp src/storage.cpp src/media.cpp -o build/storage-test
 build/storage-test
 bash test/games.sh
+bash test/gameboy.sh

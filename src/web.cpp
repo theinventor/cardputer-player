@@ -117,6 +117,7 @@ void Web::begin() {
     server_.on("/api/upload", HTTP_POST, [&] { finishUpload(); }, [&] { uploadChunk(false); });
     server_.on("/api/firmware", HTTP_POST, [&] { finishUpload(); }, [&] { uploadChunk(true); });
     server_.on("/api/playlist-import", HTTP_POST, [&] { finishUpload(); }, [&] { uploadChunk(false, true); });
+    server_.on("/api/rom", HTTP_POST, [&] { finishUpload(); }, [&] { uploadChunk(false, false, true); });
     server_.onNotFound([&] { error(404, "Not found"); });
     server_.begin();
 }
@@ -124,24 +125,24 @@ void Web::tick() {
     if (WiFi.isConnected()) server_.handleClient();
     if (rebootAt_ && int32_t(millis() - rebootAt_) >= 0) ESP.restart();
 }
-void Web::uploadChunk(bool firmware, bool playlist) {
+void Web::uploadChunk(bool firmware, bool playlist, bool rom) {
     auto& upload = server_.upload();
     if (upload.status == UPLOAD_FILE_START) {
         uploadAllowed_ = false; firmware_ = firmware; uploadError_ = ""; received_ = 0; uploadStatus_ = 400;
-        playlistUpload_ = playlist; importId_ = 0;
-        uploadTemp_ = playlist ? "/.cardtunes/playlist-import.tmp" : "/Music/.upload.part";
+        playlistUpload_ = playlist; romUpload_ = rom; importId_ = 0;
+        uploadTemp_ = playlist ? "/.cardtunes/playlist-import.tmp" : rom ? "/Games/.upload.part" : "/Music/.upload.part";
         if (!authorized()) { uploadStatus_ = 401; uploadError_ = "Access key required"; return; }
         if (app_.library.scanning()) { uploadStatus_ = 409; uploadError_ = "Cancel the music scan before uploading"; return; }
-        if (app_.games.active() != GameId::None) { uploadStatus_ = 409; uploadError_ = "Exit the game before uploading"; return; }
-        if (!parseNumber(server_.arg("size"), firmware ? 0x300000 : playlist ? Playlists::MaxBytes : 256 * 1024 * 1024, expected_) || !expected_) { uploadError_ = "A valid size query parameter is required"; return; }
+        if (app_.gameActive()) { uploadStatus_ = 409; uploadError_ = "Exit the game before uploading"; return; }
+        if (!parseNumber(server_.arg("size"), firmware ? 0x300000 : playlist ? Playlists::MaxBytes : rom ? GameBoy::MaxRomBytes : 256 * 1024 * 1024, expected_) || !expected_) { uploadError_ = "A valid size query parameter is required"; return; }
         if (!firmware && !app_.library.mounted()) { uploadStatus_ = 503; uploadError_ = "Insert a microSD card and rescan before uploading music"; return; }
         if (playlist) {
             if (server_.hasArg("id") && !parseNumber(server_.arg("id"), Playlists::MaxLists, importId_)) { uploadError_ = "Invalid playlist ID"; return; }
             if (importId_ && app_.activePlaylist == importId_) { uploadStatus_ = 409; uploadError_ = "Select All music before replacing the active playlist"; return; }
         } else if (!firmware) {
-            uploadPath_ = server_.hasArg("path") ? server_.arg("path") : String(ct::uploadPath(upload.filename.c_str()).c_str());
-            if (!validMusicPath(uploadPath_.c_str()) || !uploadPath_.startsWith("/Music/") || uploadPath_.indexOf('/', 191) >= 0) { uploadError_ = "Invalid music path"; return; }
-            if (app_.library.count() >= Library::MaxTracks) { uploadError_ = "Library limit reached"; return; }
+            uploadPath_ = server_.hasArg("path") ? server_.arg("path") : rom ? String(GameBoy::DefaultRom) : String(ct::uploadPath(upload.filename.c_str()).c_str());
+            if (rom ? !GameBoy::validPath(uploadPath_.c_str()) : (!validMusicPath(uploadPath_.c_str()) || !uploadPath_.startsWith("/Music/") || uploadPath_.indexOf('/', 191) >= 0)) { uploadError_ = "Invalid upload path"; return; }
+            if (!rom && app_.library.count() >= Library::MaxTracks) { uploadError_ = "Library limit reached"; return; }
             SDLock lock(sdMutex);
             if (SD.exists(uploadPath_)) { uploadStatus_ = 409; uploadError_ = "File already exists"; return; }
             if (SD.totalBytes() - SD.usedBytes() < expected_ + 65536) { uploadStatus_ = 507; uploadError_ = "Not enough SD space"; return; }
@@ -198,9 +199,20 @@ void Web::finishUpload() {
         auto json = cJSON_CreateObject(); cJSON_AddBoolToObject(json, "ok", true); cJSON_AddNumberToObject(json, "id", importId_);
         sendJson(201, json); return;
     }
+    if (romUpload_) {
+        auto file = app_.playlistFiles.openReader(uploadTemp_.c_str()); std::string message;
+        if (!file || !GameBoy::validate(*file, message)) {
+            file.reset(); SDLock lock(sdMutex); SD.remove(uploadTemp_);
+            error(400, message.empty() ? "Cannot read uploaded ROM" : message.c_str()); return;
+        }
+        file.reset();
+        SDLock lock(sdMutex);
+        if (SD.exists(uploadPath_) || !SD.rename(uploadTemp_, uploadPath_)) { error(409, "Cannot finalize ROM; destination may exist"); return; }
+        server_.send(201, "application/json", "{\"ok\":true}"); return;
+    }
     {
         SDLock lock(sdMutex);
-        if (!SD.rename("/Music/.upload.part", uploadPath_)) { error(500, "Cannot finalize upload"); return; }
+        if (!SD.rename(uploadTemp_, uploadPath_)) { error(500, "Cannot finalize upload"); return; }
     }
     if (!app_.library.append(uploadPath_.c_str())) { error(500, "File saved but indexing failed; rescan the library"); return; }
     if (!app_.musicUploaded()) { error(500, "File saved; reselect the playlist to refresh available songs"); return; }

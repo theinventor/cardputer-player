@@ -137,15 +137,28 @@ void Display::settings() {
     }
 }
 void Display::gameMenu() {
-    for (int i = 0; i < 3; ++i) {
-        int y = 42 + i * 23;
-        if (i == gameSelected_) canvas_.fillRect(4, y, 232, 22, Accent);
-        text(gameName(GameId(i + 1)), 8, y + 4, 153, i == gameSelected_ ? Background : 0xf2f4f1);
-        text(app_.games.hasSave(GameId(i + 1)) ? "Resume" : "Play", 174, y + 4, 58, i == gameSelected_ ? Background : Muted);
+    for (int i = 0; i < 4; ++i) {
+        int y = 40 + i * 18;
+        if (i == gameSelected_) canvas_.fillRect(4, y, 232, 18, Accent);
+        text(i == 3 ? "Pokemon Red" : gameName(GameId(i + 1)), 8, y + 1, 153, i == gameSelected_ ? Background : 0xf2f4f1);
+        text(i < 3 && app_.games.hasSave(GameId(i + 1)) ? "Resume" : "Play", 174, y + 1, 58, i == gameSelected_ ? Background : Muted);
     }
     text(gameError_.isEmpty() ? String(app_.gameStore.error().c_str()) : gameError_, 8, 116, 224, Pink);
 }
 void Display::render() {
+    if (app_.gameboy.active()) {
+        if (app_.gameboy.paused()) {
+            canvas_.fillRect(0, 0, 240, 135, Background);
+            text("GAME BOY PAUSED", 8, 10, 224, Accent);
+            text(app_.gameboy.title().c_str(), 8, 31, 224);
+            canvas_.fillRect(4, 56 + gbMenu_ * 22, 232, 19, Accent);
+            text("Resume", 8, 58, 224, gbMenu_ == 0 ? Background : Muted);
+            text("Save and exit", 8, 80, 224, gbMenu_ == 1 ? Background : Muted);
+            String error = app_.gameboy.error().empty() ? app_.gameboy.saveError().c_str() : app_.gameboy.error().c_str();
+            text(error, 8, 110, 224, Pink);
+        }
+        canvas_.pushSprite(0, 0); lastDraw_ = millis(); return;
+    }
     if (app_.games.active() != GameId::None) {
         canvas_.setFont(&fonts::Font0); canvas_.setTextSize(1);
         CanvasPainter painter(canvas_); drawGame(app_.games, painter);
@@ -186,7 +199,7 @@ void Display::command(const String& action, const String& value) {
     String error;
     bool ok = app_.control(action, value, error);
     if (!ok) app_.notice = error.isEmpty() ? "Command unavailable" : error;
-    if (action == "game") gameError_ = ok ? "" : app_.notice;
+    if (action == "game" || action == "gameboy") gameError_ = ok ? "" : app_.notice;
 }
 void Display::activateSetting(int delta) {
     switch (setting_) {
@@ -208,9 +221,20 @@ void Display::activateSetting(int delta) {
 }
 void Display::key(const String& key) {
     lastInput_ = millis();
-    if (key == "lock") { locked_ = !locked_; sleeping_ = locked_; if (locked_ && app_.games.active() != GameId::None) { app_.games.pause(); app_.saveGames(); } M5.Display.setBrightness(locked_ ? 0 : app_.settings.brightness); return; }
+    if (key == "lock") { locked_ = !locked_; sleeping_ = locked_; if (locked_ && app_.games.active() != GameId::None) { app_.games.pause(); app_.saveGames(); } if (locked_ && app_.gameboy.active()) app_.pauseGameBoy(true); M5.Display.setBrightness(locked_ ? 0 : app_.settings.brightness); return; }
     if (locked_) return;
     if (sleeping_) { sleeping_ = false; M5.Display.setBrightness(app_.settings.brightness); }
+    if (app_.gameboy.active()) {
+        if (key == "[" || key == "]") command("volume", String(std::clamp<int>(int(app_.settings.volume) + (key == "[" ? -5 : 5), 0, 100)));
+        else if (app_.gameboy.paused() && (key == "up" || key == ";" || key == "w")) gbMenu_ = 0;
+        else if (app_.gameboy.paused() && (key == "down" || key == "." || key == "s")) gbMenu_ = 1;
+        else if (app_.gameboy.paused() && (key == "enter" || key == "z" || key == " ")) {
+            if (gbMenu_ == 0) app_.pauseGameBoy(false);
+            else { String error; if (!app_.exitGame(error)) app_.notice = error; }
+        }
+        else app_.gameBoyKey(key);
+        render(); return;
+    }
     if (app_.library.scanning()) {
         if (key == "escape" || key == "`" || key == "enter") command("cancel-scan");
         else if (key == "[" || key == "]") command("volume", String(std::clamp<int>(int(app_.settings.volume) + (key == "[" ? -5 : 5), 0, 100)));
@@ -239,8 +263,8 @@ void Display::key(const String& key) {
     else if (key == "[" || key == "]") command("volume", String(std::max(0, std::min(100, int(app_.settings.volume) + (key == "[" ? -5 : 5)))));
     else if (view_ == 3) {
         if (key == "up" || key == ";" || key == "w") gameSelected_ = std::max(0, gameSelected_ - 1);
-        else if (key == "down" || key == "." || key == "s") gameSelected_ = std::min(2, gameSelected_ + 1);
-        else if (key == "enter" || key == " ") command("game", gameSlug(GameId(gameSelected_ + 1)));
+        else if (key == "down" || key == "." || key == "s") gameSelected_ = std::min(3, gameSelected_ + 1);
+        else if (key == "enter" || key == " ") command("game", gameSelected_ == 3 ? "gameboy" : gameSlug(GameId(gameSelected_ + 1)));
     } else if (view_ == 4) {
         if (key == "up" || key == ";") setting_ = std::max(0, setting_ - 1);
         else if (key == "down" || key == ".") setting_ = std::min(9, setting_ + 1);
@@ -275,6 +299,14 @@ void Display::key(const String& key) {
     render();
 }
 void Display::tick() {
+    if (app_.gameboy.active() != lastGameBoy_) {
+        lastGameBoy_ = app_.gameboy.active(); clicks_ = 0; lastInput_ = millis();
+        if (lastGameBoy_) {
+            canvas_.fillSprite(Background); gbFrame_ = 0; gbMenu_ = 0;
+            app_.gameboy.display(gameBoyLine, this);
+            editing_ = 0; searching_ = pairing_ = false;
+        } else { view_ = 0; coverTrack_ = -2; render(); }
+    }
     auto active = app_.games.active();
     if (active != lastGame_) {
         clicks_ = 0;
@@ -297,7 +329,15 @@ void Display::tick() {
         gameLeft |= c == 'a' || c == ','; gameRight |= c == 'd' || c == '/';
     }
     app_.games.held(!locked_ && !sleeping_ && gameLeft, !locked_ && !sleeping_ && gameRight);
-    if (active != GameId::None && held && !locked_) lastInput_ = millis();
+    uint8_t gbHeld = 0;
+    for (auto point : keyboard.keyList()) {
+        auto base = keyboard.getKeyValue(point).value_first;
+        if (base == KEY_ENTER) gbHeld |= gameBoyButton("enter");
+        else if (base == KEY_BACKSPACE) gbHeld |= gameBoyButton("backspace");
+        else gbHeld |= gameBoyButton(std::string(1, keyboard.getKey(point)));
+    }
+    app_.gameBoyHeld(!locked_ && !sleeping_ ? gbHeld : 0);
+    if (app_.gameActive() && held && !locked_) lastInput_ = millis();
     for (auto point : keyboard.keyList()) {
         if (point.x < 0 || point.x >= 14 || point.y < 0 || point.y >= 4 || !(pressed & (uint64_t(1) << (point.y * 14 + point.x)))) continue;
         ++app_.keyboardEvents;
@@ -315,9 +355,20 @@ void Display::tick() {
     }
     if (M5.BtnA.wasHold()) { clicks_ = 0; key("lock"); }
     if (M5.BtnA.wasClicked()) { ++clicks_; lastClick_ = millis(); }
-    if (clicks_ && millis() - lastClick_ > 350) { if (app_.games.active() != GameId::None) key("pause"); else command(clicks_ == 1 ? "toggle" : clicks_ == 2 ? "next" : "previous"); clicks_ = 0; }
-    if (!sleeping_ && !app_.library.scanning() && millis() - lastInput_ > uint32_t(app_.settings.sleepSeconds) * 1000) { sleeping_ = true; if (app_.games.active() != GameId::None) { app_.games.pause(); app_.saveGames(); } M5.Display.setBrightness(0); }
+    if (clicks_ && millis() - lastClick_ > 350) { if (app_.gameActive()) key("pause"); else command(clicks_ == 1 ? "toggle" : clicks_ == 2 ? "next" : "previous"); clicks_ = 0; }
+    if (!sleeping_ && !app_.library.scanning() && millis() - lastInput_ > uint32_t(app_.settings.sleepSeconds) * 1000) { sleeping_ = true; if (app_.games.active() != GameId::None) { app_.games.pause(); app_.saveGames(); } if (app_.gameboy.active()) app_.pauseGameBoy(true); M5.Display.setBrightness(0); }
+    if (app_.gameboy.active()) {
+        if (!sleeping_ && (app_.gameboy.paused() || app_.gameboy.frames() != gbFrame_) && millis() - lastDraw_ >= 33) {
+            render(); gbFrame_ = app_.gameboy.frames();
+        }
+        return;
+    }
     if (!sleeping_ && millis() - lastDraw_ >= (app_.games.active() == GameId::None ? 100 : 33) &&
         (app_.games.active() == GameId::None || gameRevision_ != app_.games.revision())) render();
+}
+void Display::gameBoyLine(void* context, const uint8_t* pixels, unsigned line) {
+    auto& display = *static_cast<Display*>(context);
+    // Fit the complete 160x144 image into 150x135, preserving its aspect ratio.
+    gameBoyRenderLine(static_cast<uint8_t*>(display.canvas_.getBuffer()), pixels, line);
 }
 }

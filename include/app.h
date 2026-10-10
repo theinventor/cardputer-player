@@ -2,6 +2,7 @@
 #include "audio_player.h"
 #include "order.h"
 #include "games.h"
+#include "gameboy.h"
 #include <M5Cardputer.h>
 #include <Preferences.h>
 #include <WiFi.h>
@@ -20,6 +21,7 @@ public:
     SDPlaylistFiles playlistFiles{library};
     Playlists playlists{playlistFiles};
     Games games;
+    GameBoy gameboy;
     GameStore gameStore{playlistFiles};
     AudioPlayer audio;
     Order order;
@@ -38,6 +40,11 @@ public:
     bool rescan();
     bool startGame(GameId id, String& error);
     bool exitGame(String& error);
+    bool gameActive() const { return games.active() != GameId::None || gameboy.active(); }
+    bool startGameBoy(const String& path, String& error);
+    void pauseGameBoy(bool paused);
+    void gameBoyKey(const String& key);
+    void gameBoyHeld(uint8_t buttons) { gbHeld_ = buttons; }
     void gameInput(GameKey key);
     void saveGames();
     void saveSettings();
@@ -58,6 +65,11 @@ private:
     bool wasConnected_ = false;
     bool resumeAfterGame_ = false;
     uint32_t lastGameSave_ = 0;
+    AudioState gbResume_;
+    struct GameBoyAudio { int16_t pcm[3][GameBoy::Samples]{}; };
+    std::unique_ptr<GameBoyAudio> gbAudio_;
+    uint32_t gbFrameAt_ = 0, gbPulseUntil_ = 0;
+    uint8_t gbHeld_ = 0, gbPulse_ = 0, gbBuffer_ = 0;
     String serialLine_;
     uint32_t cachedPlaylist_ = 0, cachedAt_ = 0;
     std::vector<uint32_t> cachedIds_;

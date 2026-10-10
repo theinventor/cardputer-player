@@ -4,6 +4,7 @@
 #include <map>
 #include <string_view>
 #include <cstdlib>
+#include <new>
 
 namespace ct {
 String jsonString(cJSON* json) {
@@ -60,7 +61,7 @@ bool App::begin() {
     return ready;
 }
 bool App::play(int id, uint32_t position, bool paused, int entry) {
-    if (library.scanning() || games.active() != GameId::None) return false;
+    if (library.scanning() || gameActive()) return false;
     Track track;
     if (!ready || id < 0 || !order.contains(id) || (entry >= 0 && order.trackAt(entry) != id) || !library.get(id, track)) return false;
     AudioCommand cmd; cmd.action = AudioAction::Play; cmd.track = id;
@@ -76,16 +77,27 @@ bool App::control(const String& action, const String& value, String& error) {
         library.cancelScan(); notice = library.scanError().c_str(); return true;
     }
     if (library.scanning() && action != "volume") { error = "Music scan in progress"; return false; }
-    if (action == "game") return startGame(gameId(value.c_str()), error);
+    if (action == "gameboy") return startGameBoy(value.isEmpty() ? GameBoy::DefaultRom : value, error);
+    if (action == "game") return value == "gameboy" ? startGameBoy(GameBoy::DefaultRom, error) : startGame(gameId(value.c_str()), error);
     if (action == "game-exit") return exitGame(error);
+    if (action == "gameboy-save") {
+        if (!gameboy.active()) { error = "No active Game Boy"; return false; }
+        if (!gameboy.save()) { error = gameboy.saveError().c_str(); return false; }
+        return true;
+    }
     if (action == "game-key") {
+        if (gameboy.active()) {
+            if (value == "exit") return exitGame(error);
+            if (value != "pause" && !gameBoyButton(value.c_str())) { error = "Invalid Game Boy key"; return false; }
+            gameBoyKey(value); return true;
+        }
         auto key = gameKey(value.c_str());
         if (games.active() == GameId::None || key == GameKey::None) { error = "No active game or invalid game key"; return false; }
         if (!games.input(key)) return exitGame(error);
         if (games.paused()) saveGames();
         return true;
     }
-    if (games.active() != GameId::None && action != "volume") { error = "Exit the game before changing music"; return false; }
+    if (gameActive() && action != "volume") { error = "Exit the game before changing music"; return false; }
     uint32_t n = 0;
     auto number = [&](uint32_t limit) { if (!parseNumber(value, limit, n)) { error = "Invalid numeric value"; return false; } return true; };
     AudioCommand cmd;
@@ -133,7 +145,7 @@ bool App::control(const String& action, const String& value, String& error) {
     return true;
 }
 bool App::rescan() {
-    if (library.scanning() || games.active() != GameId::None) return false;
+    if (library.scanning() || gameActive()) return false;
     if (!audio.stopAndWait()) return false;
     saveResume();
     invalidatePlaylistCache();
@@ -179,7 +191,7 @@ void App::restorePlaylist() {
 }
 bool App::selectPlaylist(uint32_t id, bool start, String& error, int track, int entry) {
     if (library.scanning()) { error = "Music scan in progress"; return false; }
-    if (games.active() != GameId::None) { error = "Exit the game before changing music"; return false; }
+    if (gameActive()) { error = "Exit the game before changing music"; return false; }
     Playlist playlist;
     std::vector<uint32_t> ids;
     if (id) {
@@ -208,7 +220,7 @@ bool App::selectPlaylist(uint32_t id, bool start, String& error, int track, int 
 }
 bool App::editPlaylist(const String& action, uint32_t& id, const String& value, uint32_t to, String& error) {
     if (library.scanning()) { error = "Music scan in progress"; return false; }
-    if (games.active() != GameId::None) { error = "Exit the game before editing playlists"; return false; }
+    if (gameActive()) { error = "Exit the game before editing playlists"; return false; }
     invalidatePlaylistCache();
     if (action == "create") {
         if (playlists.create(value.c_str(), id)) return true;
@@ -358,17 +370,19 @@ cJSON* App::status() {
     auto object = cJSON_CreateObject();
     if (!object) return nullptr;
     cJSON_AddStringToObject(object, "name", "Cardtunes");
-    cJSON_AddStringToObject(object, "version", "0.3.3");
+    cJSON_AddStringToObject(object, "version", "0.4.0-dev");
     cJSON_AddNumberToObject(object, "playlist_track_limit", Playlists::MaxTracks);
     cJSON_AddNumberToObject(object, "library_track_limit", Library::MaxTracks);
     auto game = cJSON_AddObjectToObject(object, "game");
-    cJSON_AddStringToObject(game, "id", gameSlug(games.active()));
-    cJSON_AddStringToObject(game, "name", gameName(games.active()));
-    cJSON_AddBoolToObject(game, "paused", games.paused());
+    cJSON_AddStringToObject(game, "id", gameboy.active() ? "gameboy" : gameSlug(games.active()));
+    cJSON_AddStringToObject(game, "name", gameboy.active() ? gameboy.title().c_str() : gameName(games.active()));
+    cJSON_AddBoolToObject(game, "paused", gameboy.active() ? gameboy.paused() : games.paused());
     cJSON_AddBoolToObject(game, "over", games.over());
     cJSON_AddNumberToObject(game, "score", games.score(games.active()));
     cJSON_AddNumberToObject(game, "best", games.best(games.active()));
-    cJSON_AddStringToObject(game, "save_error", gameStore.error().c_str());
+    cJSON_AddStringToObject(game, "save_error", gameboy.active() ? gameboy.saveError().c_str() : gameStore.error().c_str());
+    cJSON_AddStringToObject(game, "error", gameboy.error().c_str());
+    cJSON_AddNumberToObject(game, "frames", gameboy.frames());
     cJSON_AddStringToObject(object, "state", playbackName(s.playback));
     auto track = trackJson(s.track);
     if (!track || !cJSON_AddItemToObject(object, "track", track)) { cJSON_Delete(track); cJSON_Delete(object); return nullptr; }
@@ -468,8 +482,22 @@ void App::tick() {
     if (lastTick_) loopGapMs = std::max(loopGapMs, now - lastTick_);
     lastTick_ = now;
     serial();
+    if (gameboy.active()) {
+        uint8_t pulse = int32_t(millis() - gbPulseUntil_) < 0 ? gbPulse_ : 0;
+        gameboy.buttons(gbHeld_ | pulse);
+        if (!gameboy.paused() && int32_t(micros() - gbFrameAt_) >= 0 && gameboy.step()) {
+            gameboy.sound(gbAudio_->pcm[gbBuffer_]);
+            if (M5Cardputer.Speaker.isPlaying(0) < 2) {
+                M5Cardputer.Speaker.playRaw(gbAudio_->pcm[gbBuffer_], GameBoy::Samples, GameBoy::SampleRate, true, 1, 0);
+                gbBuffer_ = (gbBuffer_ + 1) % 3;
+            }
+            gbFrameAt_ += 16743;
+            if (int32_t(micros() - gbFrameAt_) > 16743) gbFrameAt_ = micros();
+        }
+        if (millis() - lastGameSave_ >= 30000) { gameboy.save(); lastGameSave_ = millis(); }
+    }
     auto state = audio.state();
-    if (games.active() == GameId::None && state.playback == Playback::Ended && state.epoch != handledEnd_) {
+    if (!gameActive() && state.playback == Playback::Ended && state.epoch != handledEnd_) {
         handledEnd_ = state.epoch;
         saveResume(); int next = order.next(true); if (next >= 0) play(next);
     }
@@ -485,7 +513,7 @@ void App::tick() {
 bool App::startGame(GameId id, String& error) {
     if (library.scanning()) { error = "Music scan in progress"; return false; }
     if (id == GameId::None) { error = "Expected blocks, breakout, or 2048"; return false; }
-    if (games.active() != GameId::None) { error = "Exit the current game first"; return false; }
+    if (gameActive()) { error = "Exit the current game first"; return false; }
     auto before = audio.state();
     if (before.playback == Playback::Loading) { error = "Wait for the track to finish loading"; return false; }
     if (!audio.pauseAndWait(&resumeAfterGame_)) { error = "Player is busy; retry shortly"; return false; }
@@ -493,6 +521,17 @@ bool App::startGame(GameId id, String& error) {
     return true;
 }
 bool App::exitGame(String& error) {
+    if (gameboy.active()) {
+        pauseGameBoy(true);
+        if (!gameboy.save()) { error = gameboy.saveError().c_str(); return false; }
+        gameboy.close(); gbAudio_.reset();
+        if (gbResume_.track >= 0 && gbResume_.playback == Playback::Paused) {
+            if (!play(gbResume_.track, gbResume_.positionMs, !resumeAfterGame_, order.currentPosition())) {
+                error = "Game closed; music restore failed"; notice = error; return false;
+            }
+        }
+        resumeAfterGame_ = false; return true;
+    }
     if (games.active() == GameId::None) return true;
     if (resumeAfterGame_) {
         AudioCommand cmd; cmd.action = AudioAction::Resume;
@@ -506,4 +545,41 @@ void App::gameInput(GameKey key) {
     if (games.paused()) saveGames();
 }
 void App::saveGames() { gameStore.save(games); lastGameSave_ = millis(); }
+bool App::startGameBoy(const String& path, String& error) {
+    if (library.scanning() || gameActive()) { error = "Finish scanning or exit the current game first"; return false; }
+    if (!library.mounted()) { error = "Insert a microSD card and rescan"; return false; }
+    auto before = audio.state();
+    if (before.playback == Playback::Loading) { error = "Wait for the track to finish loading"; return false; }
+    if (!audio.pauseAndWait(&resumeAfterGame_)) { error = "Player is busy"; return false; }
+    gbResume_ = audio.state(); saveResume();
+    if (!audio.releaseAndWait()) { error = "Could not release MP3 decoder"; return false; }
+    gbAudio_.reset(new (std::nothrow) GameBoyAudio{});
+    if (!gbAudio_ || !gameboy.open(playlistFiles, path.c_str())) {
+        error = gbAudio_ ? gameboy.error().c_str() : "Not enough memory for Game Boy audio";
+        gbAudio_.reset();
+        if (gbResume_.track >= 0 && gbResume_.playback == Playback::Paused) play(gbResume_.track, gbResume_.positionMs, !resumeAfterGame_, order.currentPosition());
+        return false;
+    }
+    gbHeld_ = gbPulse_ = gbBuffer_ = 0; gbPulseUntil_ = millis(); gbFrameAt_ = micros(); lastGameSave_ = millis();
+    notice = ""; return true;
+}
+void App::pauseGameBoy(bool paused) {
+    if (!gameboy.active()) return;
+    if (!paused && !gameboy.error().empty()) return;
+    gameboy.pause(paused);
+    if (paused) {
+        M5Cardputer.Speaker.stop(0);
+        while (M5Cardputer.Speaker.isPlaying(0)) delay(1);
+        gbHeld_ = gbPulse_ = 0;
+        gameboy.save();
+    } else gbFrameAt_ = micros();
+}
+void App::gameBoyKey(const String& key) {
+    if (!gameboy.active()) return;
+    if (key == "pause" || key == "tab" || key == "p") { pauseGameBoy(!gameboy.paused()); return; }
+    if (key == "exit" || key == "escape" || key == "`") {
+        String error; if (!exitGame(error)) notice = error; return;
+    }
+    gbPulse_ = gameBoyButton(key.c_str()); gbPulseUntil_ = millis() + 120;
+}
 }

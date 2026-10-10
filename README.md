@@ -10,6 +10,76 @@ library, not a replacement for or fork of that library. Original Cardtunes code
 is MIT licensed; upstream components retain the licenses in [THIRD_PARTY.md](THIRD_PARTY.md).
 Music, artwork, Wi-Fi passwords, and device access keys are not included.
 
+## Game Boy Preview (0.4.0-dev)
+
+This development build adds original Game Boy emulation alongside the existing
+music player and three games. **Firmware builds and desktop tests pass; physical
+Cardputer performance, sound, controls, and MP3 handoff still require acceptance
+testing. This build has not been flashed to the device.**
+
+Place your own original Pokemon Red ROM at `/Games/pokemon-red.gb` on the microSD
+card. Tab to Games and select Pokemon Red. The emulator supplies a custom
+12-color palette for the original artwork; this is not FireRed or GBA emulation.
+The complete image is scaled to 150x135 without cropping. ROMs are not included.
+
+| Game Boy Control | Action |
+| --- | --- |
+| WASD or semicolon/comma/period/slash | D-pad (held keys supported) |
+| Z or Space | A |
+| X or Backspace | B |
+| Enter | Start |
+| C | Select |
+| P, Tab, or G0 click | Pause menu |
+| Up/down, Enter | Choose Resume or Save and exit while paused |
+| Backtick / Fn+backtick | Save cartridge RAM and return to music |
+| [ / ] | Volume |
+
+Music decoding stops and releases its buffers while Game Boy mode is active.
+On exit, a previously playing or paused track is reopened at its saved position,
+with its playlist, queue, and shuffle order retained. Games and music do not play
+simultaneously. Wi-Fi remains enabled; neither laptop Wi-Fi nor saved credentials
+are changed. Emulator speed and Wi-Fi responsiveness still need hardware testing.
+
+**Save using Pokemon's own in-game Save menu.** Cardtunes flushes cartridge SRAM
+to `pokemon-red.gb.sav` beside the ROM every 30 seconds when changed and on pause
+or exit. This is an ordinary cartridge save, not a save state: reopening starts
+at the game's title screen, where Continue loads your in-game save. Temporary
+writes are read back before replacing the save, and a `.bak` generation is kept.
+An unreadable existing save prevents startup instead of silently overwriting it;
+a valid backup is recovered when available. These checks cannot detect every
+same-size corruption or protect against card failure. A failed save keeps the
+game paused so you can reinsert the card and retry; do not power off with a save
+error unless you accept losing changes since the last successful flush.
+
+Only original Game Boy-compatible `.gb` ROMs up to 2 MiB and 32 KiB cartridge RAM
+are accepted. Color-only cartridges, RTC cartridges, rumble, GBA, link-cable play,
+and emulator save states are not supported. Dual-mode cartridges run in DMG mode.
+The default on-device launcher is for Red; another supported ROM can be opened
+with a specific SD path using the CLI/API. No ROM or save is committed to Git.
+
+```sh
+build/cardtunes rom '/path/to/your/Pokemon Red.gb'
+build/cardtunes game gameboy
+build/cardtunes game-key start
+build/cardtunes game-key z
+build/cardtunes gameboy-save
+build/cardtunes game-exit
+build/cardtunes rom '/path/to/another.gb' '/Games/another.gb'
+build/cardtunes gameboy '/Games/another.gb'
+```
+
+ROM transfers use the authenticated `POST /api/rom?size=BYTES&path=/Games/name.gb`
+multipart endpoint. Files are validated before finalizing, never indexed as music,
+and never overwrite existing files. Uploads/scans/music changes are rejected while
+a game is open. `game`, `gameboy`, `game-key`, `gameboy-save`, and `game-exit` use
+the existing authenticated control endpoint. Status includes the title, frame
+counter, pause state, emulation error, and SD save error.
+
+Run `bash test/gameboy.sh` for synthetic-ROM tests without Nintendo assets.
+To test a personal ROM locally, pass its filename as the sole argument. The
+test runs 1,800 frames, checks video/audio output, and never modifies that file
+or writes a save beside it. See [review notes](docs/GAMEBOY-REVIEW.md).
+
 ## Controls
 
 | Key | Action |
