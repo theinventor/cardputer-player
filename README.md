@@ -10,6 +10,99 @@ library, not a replacement for or fork of that library. Original Cardtunes code
 is MIT licensed; upstream components retain the licenses in [THIRD_PARTY.md](THIRD_PARTY.md).
 Music, artwork, Wi-Fi passwords, and device access keys are not included.
 
+## Game Boy Preview (0.4.0-dev)
+
+This development build adds original Game Boy emulation alongside the existing
+music player and three games. **Firmware builds and desktop tests pass; physical
+Cardputer performance, sound, controls, and MP3 handoff still require acceptance
+testing. This build has not been flashed to the device.**
+
+Place your own original Pokemon Red ROM at `/Games/pokemon-red.gb` on the microSD
+card. Tab to Games and select Pokemon Red. The emulator supplies a custom
+12-color palette for the original artwork; this is not FireRed or GBA emulation.
+The complete image is scaled to 150x135 without cropping. ROMs are not included.
+
+| Game Boy Control | Action |
+| --- | --- |
+| WASD or semicolon/comma/period/slash | D-pad (held keys supported) |
+| Z or Space | A |
+| X or Backspace | B |
+| Enter | Start |
+| C | Select |
+| P, Tab, or G0 click | Pause menu |
+| Up/down, Enter | Choose Resume or Save and exit while paused |
+| Backtick / Fn+backtick | Save cartridge RAM and return to music |
+| [ / ] | Volume |
+
+Music decoding stops and releases its buffers while Game Boy mode is active.
+On exit, a previously playing or paused track is reopened at its saved position,
+with its playlist, queue, and shuffle order retained. Games and music do not play
+simultaneously. Wi-Fi remains enabled; neither laptop Wi-Fi nor saved credentials
+are changed. The ADV hardware smoke test measured roughly 59 game frames/second
+with a 1 MiB ROM cached in flash; the LCD is drawn at about 30 frames/second.
+Connected-Wi-Fi stress testing and longer gameplay acceptance remain outstanding.
+
+**Save using Pokemon's own in-game Save menu.** Cardtunes flushes cartridge SRAM
+to `pokemon-red.gb.sav` beside the ROM every 30 seconds when changed and on pause
+or exit. This is an ordinary cartridge save, not a save state: reopening starts
+at the game's title screen, where Continue loads your in-game save. Temporary
+writes are read back before replacing the save, and a `.bak` generation is kept.
+An unreadable existing save prevents startup instead of silently overwriting it;
+a valid backup is recovered when available. These checks cannot detect every
+same-size corruption or protect against card failure. A failed save keeps the
+game paused so you can reinsert the card and retry; do not power off with a save
+error unless you accept losing changes since the last successful flush.
+
+Only original Game Boy-compatible `.gb` ROMs up to 2 MiB and 32 KiB cartridge RAM
+are accepted. Color-only cartridges, RTC cartridges, rumble, GBA, link-cable play,
+and emulator save states are not supported. Dual-mode cartridges run in DMG mode.
+The default on-device launcher is for Red; another supported ROM can be opened
+with a specific SD path using the CLI/API. No ROM or save is committed to Git.
+
+```sh
+build/cardtunes rom '/path/to/your/Pokemon Red.gb'
+build/cardtunes game gameboy
+build/cardtunes game-key start
+build/cardtunes game-key z
+build/cardtunes gameboy-save
+build/cardtunes game-exit
+build/cardtunes rom '/path/to/another.gb' '/Games/another.gb'
+build/cardtunes gameboy '/Games/another.gb'
+```
+
+ROM transfers use the authenticated `POST /api/rom?size=BYTES&path=/Games/name.gb`
+multipart endpoint. Files are validated before finalizing, never indexed as music,
+and never overwrite existing files. Uploads/scans/music changes are rejected while
+a game is open. `game`, `gameboy`, `game-key`, `gameboy-save`, and `game-exit` use
+the existing authenticated control endpoint. Status includes the title, frame
+counter, pause state, emulation error, and SD save error.
+
+USB installation and diagnostics do not require Wi-Fi. With Python and `pyserial`
+(also available in PlatformIO's Python environment):
+
+```sh
+python3 tools/usb.py --port /dev/cu.usbmodem1101 status
+python3 tools/usb.py rom '/path/to/your/Pokemon Red.gb'
+python3 tools/usb.py control game gameboy
+python3 tools/usb.py control game-key start
+python3 tools/usb.py control game-exit
+python3 tools/usb.py screen build/device.ppm
+```
+
+The USB installer validates the ROM header and size, checks an FNV-1a checksum
+after reading the entire file back from SD, and renames a temporary file only
+after verification. It never overwrites an existing ROM or save. Interrupted
+uploads time out after 30 seconds; rerun the command to retry from the beginning.
+Only one program may use the USB serial port at a time. The physical USB console
+has the same trusted-local access as the existing serial settings commands.
+`wifi-scan` diagnoses the Cardputer's 2.4 GHz reception without changing the host
+computer's network. Open networks are supported; captive-portal login is not.
+
+Run `bash test/gameboy.sh` for synthetic-ROM tests without Nintendo assets.
+To test a personal ROM locally, pass its filename as the sole argument. The
+test runs 1,800 frames, checks video/audio output, and never modifies that file
+or writes a save beside it. See [review notes](docs/GAMEBOY-REVIEW.md).
+
 ## Controls
 
 | Key | Action |
@@ -221,9 +314,18 @@ cd cli
 go build -o ../build/cardtunes ./cmd/cardtunes
 ```
 
-Adjust the serial port for your machine. The partition table reserves two 3 MB
-application slots and a LittleFS area; ordinary firmware updates preserve NVS
-settings and the filesystem. Do not use `firmware.factory.bin` for OTA.
+Adjust the serial port for your machine. Version 0.4 requires one USB flash to
+install the new partition table: two 2 MiB application slots, a 2 MiB Game Boy
+ROM cache, and the original LittleFS area at its unchanged address. NVS settings,
+LittleFS files, and the microSD card are preserved. Subsequent firmware updates
+can use OTA. Do not use `firmware.factory.bin` for OTA or downgrade the partition
+table over Wi-Fi.
+
+ROMs up to 1 MiB are copied to internal flash on first launch and memory-mapped
+for playback without SD ROM reads. SHA-256 verifies both the source and the
+cache, and the cache is only rewritten when content changes or verification fails.
+Larger ROMs use the slower SD paging fallback. Saves always remain on microSD.
+An interrupted cache build is rebuilt on the next launch; it never replaces saves.
 
 ## CLI
 

@@ -1,5 +1,10 @@
 # Third-Party Components
 
+- `include/third_party/peanut_gb/`: [deltabeard/Peanut-GB](https://github.com/deltabeard/Peanut-GB),
+  commit `d0bcca771c83a2638c93a9ae61f3d51f226dc905`, MIT (notice in header).
+  Includes the upstream MiniGB APU from the same revision, MIT (included LICENSE).
+  No Nintendo ROM, boot ROM, artwork, or save data is distributed with Cardtunes.
+
 - `include/third_party/blocks/`: [olzhasar/sdl-tetris](https://github.com/olzhasar/sdl-tetris),
   commit `428d99d52a1de2448c7442d2655fae56aa6e9e96`, MIT (included LICENSE).
   Only the C rules engine is used, not SDL. Cardtunes moves bag/line bookkeeping

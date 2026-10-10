@@ -55,7 +55,7 @@ func TestPlaylistCommands(t *testing.T) {
 }
 
 func TestGenericControlCommands(t *testing.T) {
-	for _, tc := range []struct{ action, value string }{{"game", "blocks"}, {"game", "breakout"}, {"game", "2048"}, {"game-key", "primary"}, {"game-key", "pause"}, {"game-exit", ""}, {"play-entry", "0"}, {"play-entry", "999"}, {"queue", "37"}} {
+	for _, tc := range []struct{ action, value string }{{"game", "blocks"}, {"game", "breakout"}, {"game", "2048"}, {"game", "gameboy"}, {"gameboy", "/Games/Red.gb"}, {"gameboy-save", ""}, {"game-key", "start"}, {"game-key", "primary"}, {"game-key", "pause"}, {"game-exit", ""}, {"play-entry", "0"}, {"play-entry", "999"}, {"queue", "37"}} {
 		t.Run(tc.action+" "+tc.value, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Method != "POST" || r.URL.Path != "/api/control" || r.Header.Get("Authorization") != "Bearer test-key" {
@@ -475,6 +475,54 @@ func TestPlaylistImport(t *testing.T) {
 	}
 	if _, err := client.playlist([]string{"import", path}); err == nil || !strings.Contains(err.Error(), "device limit") {
 		t.Fatal("oversized import was not rejected locally")
+	}
+}
+
+func TestRomUpload(t *testing.T) {
+	content := bytes.Repeat([]byte{0, 255, 3, 8}, 8192)
+	path := filepath.Join(t.TempDir(), "test.gb")
+	if err := os.WriteFile(path, content, 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, destination := range []string{"", "/Games/Test & More.gb"} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			want := destination
+			if want == "" {
+				want = "/Games/pokemon-red.gb"
+			}
+			if r.Method != "POST" || r.URL.Path != "/api/rom" || r.URL.Query().Get("path") != want || r.Header.Get("Authorization") != "Bearer test-key" {
+				t.Error("incorrect ROM upload request")
+			}
+			if r.ContentLength <= int64(len(content)) || len(r.TransferEncoding) != 0 || r.URL.Query().Get("size") != strconv.Itoa(len(content)) {
+				t.Error("incorrect ROM framing")
+			}
+			reader, err := r.MultipartReader()
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			part, err := reader.NextPart()
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			data, err := io.ReadAll(part)
+			if err != nil || !bytes.Equal(data, content) {
+				t.Error("ROM payload changed")
+			}
+			w.WriteHeader(201)
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		}))
+		t.Setenv("CARDTUNES_HOST", server.URL)
+		t.Setenv("CARDTUNES_TOKEN", "test-key")
+		args := []string{"rom", path}
+		if destination != "" {
+			args = append(args, destination)
+		}
+		if _, err := runOutput(t, args...); err != nil {
+			t.Error(err)
+		}
+		server.Close()
 	}
 }
 

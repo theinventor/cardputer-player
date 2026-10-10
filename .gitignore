@@ -7,3 +7,9 @@ secrets.ini
 data/*.mp3
 data/*.jpg
 include/web_page.h
+*.gb
+*.gbc
+*.gba
+*.sav
+*.sav.*
+__pycache__/
