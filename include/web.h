@@ -11,9 +11,14 @@ public:
     void begin();
     void tick();
 private:
+    class Listener : public WebServer {
+    public:
+        using WebServer::WebServer;
+        bool listening() { return bool(_server); }
+    };
     App& app_;
     Display& display_;
-    WebServer server_;
+    Listener server_;
     WebLifecycle lifecycle_;
     File upload_;
     String uploadPath_, uploadError_, uploadTemp_;

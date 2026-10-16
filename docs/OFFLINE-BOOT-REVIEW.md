@@ -23,14 +23,18 @@ SD-card or Pokemon-save failure.
 Register routes during setup without opening sockets. Service the HTTP listener
 only once Wi-Fi is enabled and connected. Close it on disconnect and recreate
 it on reconnect; retain route registrations. Leave OTA reboot scheduling outside
-the connection guard. Do not force Wi-Fi on or change saved credentials.
+the connection guard. Do not force Wi-Fi on or change saved credentials. Check
+the underlying listener after `begin()` (the Arduino method returns void); if
+socket creation or binding fails, close partial resources and retry after one
+second rather than treating it as started.
 
 ## Verification
 
 `bash test/run.sh` exercises the actual listener lifecycle with a fake server
 that asserts if sockets are opened before the network is ready. Cases cover cold
 offline boot, delayed connection, one-time startup, repeated disconnect/offline
-ticks, reconnect cycles, and an already-connected first tick. The full native
+ticks, reconnect cycles, an already-connected first tick, failed socket startup,
+bounded retries, timer rollover, and reconnect during retry. The full native
 media, playlists, storage, games, and Game Boy test suite also passes.
 
 The normal ADV firmware build passes. Hardware regression checklist:

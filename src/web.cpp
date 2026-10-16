@@ -121,7 +121,7 @@ void Web::begin() {
     server_.onNotFound([&] { error(404, "Not found"); });
 }
 void Web::tick() {
-    lifecycle_.tick(server_, app_.settings.wifi && WiFi.isConnected());
+    lifecycle_.tick(server_, app_.settings.wifi && WiFi.isConnected(), millis());
     if (rebootAt_ && int32_t(millis() - rebootAt_) >= 0) ESP.restart();
 }
 void Web::uploadChunk(bool firmware, bool playlist, bool rom) {
