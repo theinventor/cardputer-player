@@ -10,12 +10,17 @@ library, not a replacement for or fork of that library. Original Cardtunes code
 is MIT licensed; upstream components retain the licenses in [THIRD_PARTY.md](THIRD_PARTY.md).
 Music, artwork, Wi-Fi passwords, and device access keys are not included.
 
-## Game Boy Preview (0.4.0-dev)
+## Game Boy Preview (0.4.1-dev)
 
 This development build adds original Game Boy emulation alongside the existing
-music player and three games. **Firmware builds and desktop tests pass; physical
-Cardputer performance, sound, controls, and MP3 handoff still require acceptance
-testing. This build has not been flashed to the device.**
+music player and three games. The 0.4.0 build was flashed and smoke-tested on an
+ADV, including rendering, performance, and repeated MP3 handoff. Longer gameplay,
+sound acceptance, and an in-game Save/Continue power-cycle test remain outstanding.
+
+0.4.1 fixes a boot loop when Wi-Fi is disabled or no SSID is configured. HTTP
+listening starts only after Wi-Fi connects, stops on disconnect, and restarts
+after reconnect. Music and games remain available offline. The status API includes
+`wifi_enabled` to distinguish a disabled radio from an unsuccessful connection.
 
 Place your own original Pokemon Red ROM at `/Games/pokemon-red.gb` on the microSD
 card. Tab to Games and select Pokemon Red. The emulator supplies a custom
