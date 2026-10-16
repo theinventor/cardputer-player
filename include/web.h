@@ -1,6 +1,7 @@
 #pragma once
 #include "app.h"
 #include "display.h"
+#include "web_lifecycle.h"
 #include <WebServer.h>
 
 namespace ct {
@@ -13,6 +14,7 @@ private:
     App& app_;
     Display& display_;
     WebServer server_;
+    WebLifecycle lifecycle_;
     File upload_;
     String uploadPath_, uploadError_, uploadTemp_;
     uint32_t expected_ = 0, received_ = 0, rebootAt_ = 0;

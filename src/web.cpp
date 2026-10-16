@@ -119,10 +119,9 @@ void Web::begin() {
     server_.on("/api/playlist-import", HTTP_POST, [&] { finishUpload(); }, [&] { uploadChunk(false, true); });
     server_.on("/api/rom", HTTP_POST, [&] { finishUpload(); }, [&] { uploadChunk(false, false, true); });
     server_.onNotFound([&] { error(404, "Not found"); });
-    server_.begin();
 }
 void Web::tick() {
-    if (WiFi.isConnected()) server_.handleClient();
+    lifecycle_.tick(server_, app_.settings.wifi && WiFi.isConnected());
     if (rebootAt_ && int32_t(millis() - rebootAt_) >= 0) ESP.restart();
 }
 void Web::uploadChunk(bool firmware, bool playlist, bool rom) {
