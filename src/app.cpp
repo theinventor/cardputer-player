@@ -373,7 +373,7 @@ cJSON* App::status() {
     auto object = cJSON_CreateObject();
     if (!object) return nullptr;
     cJSON_AddStringToObject(object, "name", "Cardtunes");
-    cJSON_AddStringToObject(object, "version", "0.4.0-dev");
+    cJSON_AddStringToObject(object, "version", "0.4.1-dev");
     cJSON_AddNumberToObject(object, "playlist_track_limit", Playlists::MaxTracks);
     cJSON_AddNumberToObject(object, "library_track_limit", Library::MaxTracks);
     auto game = cJSON_AddObjectToObject(object, "game");
@@ -426,6 +426,7 @@ cJSON* App::status() {
     cJSON_AddStringToObject(object, "ssid", WiFi.SSID().c_str());
     cJSON_AddNumberToObject(object, "rssi", WiFi.isConnected() ? WiFi.RSSI() : 0);
     cJSON_AddNumberToObject(object, "wifi_status", WiFi.status());
+    cJSON_AddBoolToObject(object, "wifi_enabled", settings.wifi);
     cJSON_AddStringToObject(object, "configured_ssid", settings.ssid.c_str());
     cJSON_AddNumberToObject(object, "loading_percent", s.loadingPercent);
     cJSON_AddNumberToObject(object, "keyboard_keys", M5Cardputer.Keyboard.isPressed());
